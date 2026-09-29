@@ -1,0 +1,56 @@
+pharmacy-erp/
+├── backend/
+│   ├── app.py
+│   ├── config.py
+│   ├── extensions.py
+│   ├── models.py
+│   ├── seed.py
+│   ├── requirements.txt
+│   ├── .env.example
+│   ├── utils/
+│   │   ├── __init__.py
+│   │   ├── auth.py
+│   │   └── helpers.py
+│   └── routes/
+│       ├── __init__.py
+│       ├── auth.py
+│       ├── masters.py
+│       ├── medicines.py
+│       ├── purchases.py
+│       ├── sales.py
+│       ├── inventory.py
+│       ├── expenses.py
+│       ├── payments.py
+│       ├── dashboard.py
+│       └── reports.py
+└── frontend/
+    ├── package.json
+    ├── vite.config.js
+    ├── tailwind.config.js
+    ├── postcss.config.js
+    ├── index.html
+    └── src/
+        ├── main.jsx
+        ├── App.jsx
+        ├── index.css
+        ├── api/client.js
+        ├── context/AuthContext.jsx
+        ├── components/Layout.jsx
+        ├── components/ui.jsx
+        ├── components/CrudPage.jsx
+        └── pages/
+            ├── Login.jsx
+            ├── Dashboard.jsx
+            ├── Medicines.jsx
+            ├── Manufacturers.jsx
+            ├── Vendors.jsx
+            ├── Customers.jsx
+            ├── Purchases.jsx
+            ├── NewPurchase.jsx
+            ├── Inventory.jsx
+            ├── POS.jsx
+            ├── Sales.jsx
+            ├── Expenses.jsx
+            ├── Payments.jsx
+            ├── Reports.jsx
+            └── Users.jsx
