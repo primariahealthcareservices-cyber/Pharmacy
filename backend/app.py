@@ -47,7 +47,64 @@ def create_app():
     @app.errorhandler(500)
     def server_error(e):
         db.session.rollback()
-        return jsonify({"message": "Internal server error"}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "message": "Internal server error",
+            "error": str(e),
+            "detail": repr(getattr(e, "original_exception", e)),
+        }), 500
+
+    # ── JWT error handlers → 401 instead of default 422 ──
+    from flask_jwt_extended.exceptions import (
+        NoAuthorizationError, InvalidHeaderError, CSRFError,
+        WrongTokenError, RevokedTokenError,
+        FreshTokenRequired, UserLookupError, UserClaimsVerificationError,
+    )
+    from jwt.exceptions import (
+        ExpiredSignatureError, InvalidTokenError, DecodeError,
+    )
+
+    @jwt.unauthorized_loader
+    def missing_token(reason):
+        return jsonify({"message": "Missing or invalid token", "detail": reason}), 401
+
+    @jwt.invalid_token_loader
+    def invalid_token(reason):
+        return jsonify({"message": "Invalid token", "detail": reason}), 401
+
+    @jwt.expired_token_loader
+    def expired_token(jwt_header, jwt_payload):
+        return jsonify({"message": "Token has expired"}), 401
+
+    @jwt.revoked_token_loader
+    def revoked_token(jwt_header, jwt_payload):
+        return jsonify({"message": "Token has been revoked"}), 401
+
+    @jwt.needs_fresh_token_loader
+    def needs_fresh(jwt_header, jwt_payload):
+        return jsonify({"message": "Fresh token required"}), 401
+
+    @jwt.user_lookup_error_loader
+    def user_lookup_error(jwt_header, jwt_payload):
+        return jsonify({"message": "User not found"}), 401
+
+    @app.errorhandler(NoAuthorizationError)
+    def handle_no_auth(e):
+        return jsonify({"message": "Missing Authorization Header"}), 401
+
+    @app.errorhandler(ExpiredSignatureError)
+    def handle_expired(e):
+        return jsonify({"message": "Token has expired"}), 401
+
+    @app.errorhandler(InvalidTokenError)
+    def handle_invalid(e):
+        return jsonify({"message": "Invalid token"}), 401
+
+    @app.errorhandler(422)
+    def handle_422(e):
+        # JWT errors that slip through → convert to 401
+        return jsonify({"message": "Unprocessable request", "detail": str(e)}), 422
 
     return app
 

@@ -7,12 +7,71 @@ from utils.helpers import audit, parse_date
 
 medicines_bp = Blueprint("medicines", __name__)
 
-FIELDS = ["sku", "barcode", "name", "generic_name", "brand_name", "category_id",
-          "manufacturer_id", "medicine_type", "dosage_form", "strength",
-          "composition", "pack_type", "description", "hsn_code", "is_prescription",
-          "base_unit", "units_per_strip", "strips_per_box", "gst_rate", "mrp",
-          "cost_price", "selling_price", "wholesale_price", "min_selling_price",
-          "reorder_level", "max_level", "rack_location", "is_active"]
+FIELDS = [
+    "sku", "barcode", "name", "generic_name", "brand_name",
+    "category_id", "manufacturer_id",
+    "medicine_type", "dosage_form", "strength",
+    "composition", "pack_type", "description", "hsn_code", "is_prescription",
+    "base_unit", "units_per_strip", "strips_per_box",
+    "gst_rate", "mrp", "cost_price", "selling_price", "wholesale_price",
+    "min_selling_price",
+    "reorder_level", "max_level", "rack_location", "is_active",
+]
+
+# Fields that must be ints (or None for FKs)
+INT_FIELDS = {
+    "category_id", "manufacturer_id",
+    "units_per_strip", "strips_per_box", "reorder_level", "max_level",
+}
+FK_FIELDS = {"category_id", "manufacturer_id"}
+FLOAT_FIELDS = {
+    "gst_rate", "mrp", "cost_price", "selling_price",
+    "wholesale_price", "min_selling_price",
+}
+BOOL_FIELDS = {"is_prescription", "is_active"}
+
+
+def _coerce(data):
+    """Normalize incoming JSON to correct types + drop unknown keys."""
+    out = {}
+    for f in FIELDS:
+        if f not in data:
+            continue
+        v = data[f]
+
+        # empty string → None (lets nullable columns stay null)
+        if isinstance(v, str) and v.strip() == "":
+            v = None
+
+        if f in FK_FIELDS:
+            if v is None or v == "":
+                v = None
+            else:
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    v = None
+        elif f in INT_FIELDS:
+            if v is None or v == "":
+                v = 0
+            else:
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    v = 0
+        elif f in FLOAT_FIELDS:
+            if v is None or v == "":
+                v = 0.0
+            else:
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    v = 0.0
+        elif f in BOOL_FIELDS:
+            v = bool(v)
+
+        out[f] = v
+    return out
 
 
 @medicines_bp.get("")
@@ -22,11 +81,13 @@ def list_medicines():
     query = Medicine.query
     if q:
         like = f"%{q}%"
-        query = query.filter(or_(Medicine.name.like(like),
-                                 Medicine.generic_name.like(like),
-                                 Medicine.sku.like(like),
-                                 Medicine.barcode.like(like),
-                                 Medicine.brand_name.like(like)))
+        query = query.filter(or_(
+            Medicine.name.like(like),
+            Medicine.generic_name.like(like),
+            Medicine.sku.like(like),
+            Medicine.barcode.like(like),
+            Medicine.brand_name.like(like),
+        ))
     if request.args.get("category_id"):
         query = query.filter(Medicine.category_id == int(request.args["category_id"]))
     if request.args.get("manufacturer_id"):
@@ -45,20 +106,28 @@ def list_medicines():
 @medicines_bp.post("")
 @role_required("super_admin", "admin", "inventory_manager")
 def create_medicine():
-    d = request.get_json() or {}
+    d = request.get_json(silent=True) or {}
     if not d.get("name"):
         return jsonify({"message": "name is required"}), 400
+
+    clean = _coerce(d)
     m = Medicine()
-    for f in FIELDS:
-        if f in d:
-            setattr(m, f, d[f])
+    for k, v in clean.items():
+        setattr(m, k, v)
+
     if not m.sku:
         last = Medicine.query.order_by(Medicine.id.desc()).first()
         m.sku = f"MED{((last.id if last else 0) + 1):05d}"
-    db.session.add(m)
-    db.session.flush()
-    audit("create", "medicines", m.id, None, d)
-    db.session.commit()
+
+    try:
+        db.session.add(m)
+        db.session.flush()
+        audit("create", "medicines", m.id, None, clean)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": "Failed to create medicine", "error": str(e)}), 400
+
     return jsonify(m.to_dict()), 201
 
 
@@ -76,12 +145,16 @@ def get_medicine(mid):
 def update_medicine(mid):
     m = Medicine.query.get_or_404(mid)
     old = m.to_dict(False)
-    d = request.get_json() or {}
-    for f in FIELDS:
-        if f in d:
-            setattr(m, f, d[f])
-    audit("update", "medicines", mid, old, d)
-    db.session.commit()
+    d = request.get_json(silent=True) or {}
+    clean = _coerce(d)
+    for k, v in clean.items():
+        setattr(m, k, v)
+    try:
+        audit("update", "medicines", mid, old, clean)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": "Failed to update medicine", "error": str(e)}), 400
     return jsonify(m.to_dict())
 
 
@@ -99,8 +172,12 @@ def delete_medicine(mid):
 @role_required()
 def medicine_batches(mid):
     """FIFO order by expiry — used by POS."""
-    batches = (Batch.query.filter(Batch.medicine_id == mid, Batch.qty > 0)
-               .order_by(Batch.exp_date.asc()).all())
+    batches = (
+        Batch.query
+        .filter(Batch.medicine_id == mid, Batch.qty > 0)
+        .order_by(Batch.exp_date.asc())
+        .all()
+    )
     return jsonify([b.to_dict() for b in batches])
 
 
@@ -112,11 +189,17 @@ def pos_search():
     if not q:
         return jsonify([])
     like = f"%{q}%"
-    meds = (Medicine.query
-            .filter(Medicine.is_active.is_(True))
-            .filter(or_(Medicine.name.like(like), Medicine.generic_name.like(like),
-                        Medicine.barcode == q, Medicine.sku == q))
-            .limit(20).all())
+    meds = (
+        Medicine.query
+        .filter(Medicine.is_active.is_(True))
+        .filter(or_(
+            Medicine.name.like(like),
+            Medicine.generic_name.like(like),
+            Medicine.barcode == q,
+            Medicine.sku == q,
+        ))
+        .limit(20).all()
+    )
     out = []
     for m in meds:
         batches = [b.to_dict() for b in m.batches if b.qty > 0]

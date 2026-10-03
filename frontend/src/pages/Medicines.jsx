@@ -12,6 +12,17 @@ const EMPTY = {
   rack_location: "", barcode: "", sku: "", is_active: true,
 };
 
+// Whitelist — must match backend FIELDS exactly
+const SEND_FIELDS = Object.keys(EMPTY);
+
+const NUMERIC_INT = [
+  "units_per_strip", "strips_per_box", "reorder_level", "max_level",
+];
+const NUMERIC_FLOAT = [
+  "gst_rate", "mrp", "cost_price", "selling_price", "wholesale_price",
+];
+const FK_FIELDS = ["category_id", "manufacturer_id"];
+
 export default function Medicines() {
   const [rows, setRows] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -24,40 +35,85 @@ export default function Medicines() {
   const [error, setError] = useState("");
 
   const load = async () => {
-    const { data } = await api.get("/medicines", { params: { q, low_stock: lowOnly ? 1 : 0 } });
-    setRows(data);
+    try {
+      const { data } = await api.get("/medicines", {
+        params: { q, low_stock: lowOnly ? 1 : 0 },
+      });
+      setRows(data);
+    } catch (err) {
+      console.error("Load medicines failed:", err.response?.data || err.message);
+    }
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, lowOnly]);
 
   useEffect(() => {
-    api.get("/categories").then((r) => setCategories(r.data));
-    api.get("/manufacturers").then((r) => setManufacturers(r.data));
+    api.get("/categories").then((r) => setCategories(r.data)).catch(() => {});
+    api.get("/manufacturers").then((r) => setManufacturers(r.data)).catch(() => {});
   }, []);
 
-  const openCreate = () => { setEditing(null); setForm(EMPTY); setError(""); setOpen(true); };
-  const openEdit = (r) => { setEditing(r); setForm({ ...EMPTY, ...r }); setError(""); setOpen(true); };
+  const openCreate = () => {
+    setEditing(null);
+    setForm(EMPTY);
+    setError("");
+    setOpen(true);
+  };
+
+  const openEdit = (r) => {
+    const clean = {};
+    Object.keys(EMPTY).forEach((k) => {
+      clean[k] = r[k] !== undefined && r[k] !== null ? r[k] : EMPTY[k];
+    });
+    setEditing(r);
+    setForm(clean);
+    setError("");
+    setOpen(true);
+  };
+
+  const buildPayload = () => {
+    const payload = {};
+    SEND_FIELDS.forEach((k) => {
+      let v = form[k];
+
+      if (typeof v === "string" && v.trim() === "") v = null;
+
+      if (FK_FIELDS.includes(k)) {
+        payload[k] = v === null || v === "" ? null : Number(v) || null;
+      } else if (NUMERIC_INT.includes(k)) {
+        payload[k] = v === null || v === "" ? 0 : Number(v) || 0;
+      } else if (NUMERIC_FLOAT.includes(k)) {
+        payload[k] = v === null || v === "" ? 0 : Number(v) || 0;
+      } else if (k === "is_prescription" || k === "is_active") {
+        payload[k] = Boolean(v);
+      } else {
+        payload[k] = v === "" ? null : v;
+      }
+    });
+    return payload;
+  };
 
   const save = async (e) => {
     e.preventDefault();
     setError("");
-    const payload = { ...form };
-    ["category_id", "manufacturer_id"].forEach((k) => {
-      payload[k] = payload[k] ? Number(payload[k]) : null;
-    });
-    ["units_per_strip", "strips_per_box", "reorder_level", "max_level"].forEach((k) => {
-      payload[k] = Number(payload[k]) || 0;
-    });
-    ["gst_rate", "mrp", "cost_price", "selling_price", "wholesale_price"].forEach((k) => {
-      payload[k] = Number(payload[k]) || 0;
-    });
+    const payload = buildPayload();
+
     try {
       if (editing) await api.put(`/medicines/${editing.id}`, payload);
       else await api.post("/medicines", payload);
       setOpen(false);
       load();
     } catch (err) {
-      setError(err.response?.data?.message || "Save failed");
+      const data = err.response?.data;
+      if (data?.errors) {
+        setError(
+          Object.entries(data.errors)
+            .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
+            .join(" · ")
+        );
+      } else {
+        setError(data?.message || `Save failed (${err.response?.status || "network"})`);
+      }
+      console.error("Save error:", data || err.message);
     }
   };
 
@@ -75,7 +131,8 @@ export default function Medicines() {
           <Input placeholder="Search name / generic / SKU / barcode..."
                  value={q} onChange={(e) => setQ(e.target.value)} className="max-w-md" />
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={lowOnly} onChange={(e) => setLowOnly(e.target.checked)} />
+            <input type="checkbox" checked={lowOnly}
+                   onChange={(e) => setLowOnly(e.target.checked)} />
             Low stock only
           </label>
         </div>
@@ -102,7 +159,8 @@ export default function Medicines() {
             { key: "mrp", label: "MRP/unit", render: (r) => money(r.mrp) },
             { key: "selling_price", label: "Sell/unit", render: (r) => money(r.selling_price) },
             { key: "_a", label: "", render: (r) => (
-              <button onClick={() => openEdit(r)} className="text-blue-600 text-xs font-semibold">Edit</button>
+              <button onClick={() => openEdit(r)}
+                      className="text-blue-600 text-xs font-semibold">Edit</button>
             )},
           ]}
         />
