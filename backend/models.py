@@ -45,6 +45,7 @@ class Manufacturer(db.Model):
     payment_terms = db.Column(db.String(100))
     credit_limit = db.Column(db.Float, default=0)
     bank_details = db.Column(db.Text)
+    opening_balance = db.Column(db.Float, default=0)   # 🆕
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     medicines = db.relationship("Medicine", backref="manufacturer", lazy=True)
@@ -57,6 +58,7 @@ class Manufacturer(db.Model):
                 "payment_terms": self.payment_terms,
                 "credit_limit": self.credit_limit or 0,
                 "bank_details": self.bank_details,
+                "opening_balance": self.opening_balance or 0,
                 "medicine_count": len(self.medicines)}
 
 
@@ -96,7 +98,7 @@ class Customer(db.Model):
     age = db.Column(db.Integer)
     gender = db.Column(db.String(15))
     address = db.Column(db.Text)
-    customer_type = db.Column(db.String(30), default="retail")   # retail|wholesale|hospital|corporate|vip|distributor
+    customer_type = db.Column(db.String(30), default="retail")
     doctor_name = db.Column(db.String(150))
     credit_limit = db.Column(db.Float, default=0)
     is_active = db.Column(db.Boolean, default=True)
@@ -122,6 +124,14 @@ class Category(db.Model):
 
 
 # ────────────────────────────  MEDICINES  ────────────────────────────
+def _plural(unit, n):
+    """'tablet' → 'tablets'. Units like 'ml' / 'gram' keep sensible forms."""
+    unit = unit or "unit"
+    if n == 1 or unit.lower() == "ml":
+        return unit
+    return unit + "s"
+
+
 class Medicine(db.Model):
     """Stock is always tracked in the smallest sellable BASE UNIT (tablet / ml / unit)."""
     __tablename__ = "medicines"
@@ -134,7 +144,7 @@ class Medicine(db.Model):
     category_id = db.Column(db.Integer, db.ForeignKey("categories.id"))
     manufacturer_id = db.Column(db.Integer, db.ForeignKey("manufacturers.id"))
 
-    medicine_type = db.Column(db.String(40))          # Tablet, Syrup, Injection...
+    medicine_type = db.Column(db.String(40))
     dosage_form = db.Column(db.String(60))
     strength = db.Column(db.String(60))
     composition = db.Column(db.Text)
@@ -144,10 +154,9 @@ class Medicine(db.Model):
     is_prescription = db.Column(db.Boolean, default=False)
 
     # ── Packaging hierarchy ──
-    base_unit = db.Column(db.String(20), default="tablet")   # tablet / ml / unit
+    base_unit = db.Column(db.String(20), default="tablet")
     units_per_strip = db.Column(db.Integer, default=1)
     strips_per_box = db.Column(db.Integer, default=1)
-    # units_per_box = units_per_strip * strips_per_box  (computed)
 
     # ── Pricing (all per BASE UNIT) ──
     gst_rate = db.Column(db.Float, default=12)
@@ -174,7 +183,31 @@ class Medicine(db.Model):
         return (self.units_per_strip or 1) * (self.strips_per_box or 1)
 
     def stock(self):
-        return sum(b.qty for b in self.batches)
+        """Total stock, always normalized to base units (e.g. tablets)."""
+        return sum((b.qty or 0) for b in self.batches)
+
+    def stock_breakdown(self, total=None):
+        total = self.stock() if total is None else total
+        ups = max(1, self.units_per_strip or 1)
+        spb = max(1, self.strips_per_box or 1)
+
+        strips_total, loose = divmod(total, ups)
+        boxes, strips = divmod(strips_total, spb)
+
+        parts = []
+        if boxes and spb > 1:
+            parts.append(f"{boxes} {'box' if boxes == 1 else 'boxes'}")
+        else:
+            strips += boxes * spb
+        if strips and ups > 1:
+            parts.append(f"{strips} {'strip' if strips == 1 else 'strips'}")
+        elif strips:
+            loose += strips * ups
+        if loose or not parts:
+            parts.append(f"{loose} {_plural(self.base_unit, loose)}")
+
+        return {"boxes": boxes if spb > 1 else 0, "strips": strips if ups > 1 else 0,
+                "loose": loose, "text": " · ".join(parts)}
 
     def to_dict(self, with_stock=True):
         d = {
@@ -201,9 +234,11 @@ class Medicine(db.Model):
             "rack_location": self.rack_location, "is_active": self.is_active,
         }
         if with_stock:
-            d["stock"] = self.stock()
-            d["stock_value"] = round(self.stock() * (self.cost_price or 0), 2)
-            d["low_stock"] = self.stock() <= (self.reorder_level or 0)
+            total = self.stock()
+            d["stock"] = total
+            d["stock_breakdown"] = self.stock_breakdown(total)["text"]
+            d["stock_value"] = round(total * (self.cost_price or 0), 2)
+            d["low_stock"] = total <= (self.reorder_level or 0)
         return d
 
 
@@ -217,18 +252,33 @@ class Batch(db.Model):
     mfg_date = db.Column(db.Date)
     exp_date = db.Column(db.Date, index=True)
 
-    # all prices per BASE UNIT
     cost_price = db.Column(db.Float, default=0)
     mrp = db.Column(db.Float, default=0)
     selling_price = db.Column(db.Float, default=0)
     gst_rate = db.Column(db.Float, default=12)
 
-    qty = db.Column(db.Integer, default=0)            # remaining, base units
+    qty = db.Column(db.Integer, default=0)
     initial_qty = db.Column(db.Integer, default=0)
     free_qty = db.Column(db.Integer, default=0)
+
+    entry_qty = db.Column(db.Integer, default=0)
+    entry_unit = db.Column(db.String(20), default="tablet")
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     vendor = db.relationship("Vendor", lazy=True)
+
+    def entry_label(self):
+        n = self.entry_qty or 0
+        if not n:
+            return None
+        u = (self.entry_unit or "tablet").lower()
+        if u == "box":
+            return f"{n} {'box' if n == 1 else 'boxes'}"
+        if u == "strip":
+            return f"{n} {'strip' if n == 1 else 'strips'}"
+        base = self.medicine.base_unit if self.medicine else "tablet"
+        return f"{n} {_plural(base, n)}"
 
     def to_dict(self):
         return {
@@ -240,9 +290,13 @@ class Batch(db.Model):
             "mfg_date": iso(self.mfg_date), "exp_date": iso(self.exp_date),
             "cost_price": self.cost_price, "mrp": self.mrp,
             "selling_price": self.selling_price, "gst_rate": self.gst_rate,
-            "qty": self.qty, "initial_qty": self.initial_qty,
+            "qty": self.qty,
+            "initial_qty": self.initial_qty,
             "free_qty": self.free_qty,
-            "value": round(self.qty * (self.cost_price or 0), 2),
+            "entry_qty": self.entry_qty,
+            "entry_unit": self.entry_unit,
+            "entry_label": self.entry_label(),
+            "value": round((self.qty or 0) * (self.cost_price or 0), 2),
         }
 
 
@@ -260,7 +314,7 @@ class Purchase(db.Model):
     total = db.Column(db.Float, default=0)
     paid_amount = db.Column(db.Float, default=0)
     due_amount = db.Column(db.Float, default=0)
-    status = db.Column(db.String(20), default="unpaid")  # unpaid|partial|paid
+    status = db.Column(db.String(20), default="unpaid")
     notes = db.Column(db.Text)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -294,9 +348,9 @@ class PurchaseItem(db.Model):
     batch_no = db.Column(db.String(80))
     mfg_date = db.Column(db.Date)
     exp_date = db.Column(db.Date)
-    quantity = db.Column(db.Integer, default=0)      # in base units
+    quantity = db.Column(db.Integer, default=0)
     free_qty = db.Column(db.Integer, default=0)
-    cost_price = db.Column(db.Float, default=0)      # per base unit
+    cost_price = db.Column(db.Float, default=0)
     mrp = db.Column(db.Float, default=0)
     selling_price = db.Column(db.Float, default=0)
     gst_rate = db.Column(db.Float, default=12)
@@ -369,11 +423,11 @@ class Sale(db.Model):
     discount = db.Column(db.Float, default=0)
     tax_amount = db.Column(db.Float, default=0)
     total = db.Column(db.Float, default=0)
-    cogs = db.Column(db.Float, default=0)            # cost of goods sold
+    cogs = db.Column(db.Float, default=0)
     profit = db.Column(db.Float, default=0)
     paid_amount = db.Column(db.Float, default=0)
     due_amount = db.Column(db.Float, default=0)
-    payment_status = db.Column(db.String(20), default="paid")  # paid|partial|unpaid
+    payment_status = db.Column(db.String(20), default="paid")
     payment_mode = db.Column(db.String(40), default="cash")
     prescription_no = db.Column(db.String(80))
     doctor_name = db.Column(db.String(150))
@@ -416,11 +470,11 @@ class SaleItem(db.Model):
     batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))
     batch_no = db.Column(db.String(80))
     exp_date = db.Column(db.Date)
-    quantity = db.Column(db.Integer, default=0)      # base units
+    quantity = db.Column(db.Integer, default=0)
     unit_label = db.Column(db.String(20), default="unit")
-    mrp = db.Column(db.Float, default=0)             # per base unit
-    selling_price = db.Column(db.Float, default=0)   # per base unit
-    cost_price = db.Column(db.Float, default=0)      # per base unit
+    mrp = db.Column(db.Float, default=0)
+    selling_price = db.Column(db.Float, default=0)
+    cost_price = db.Column(db.Float, default=0)
     discount_percent = db.Column(db.Float, default=0)
     gst_rate = db.Column(db.Float, default=12)
     tax_amount = db.Column(db.Float, default=0)
@@ -450,7 +504,7 @@ class SalePayment(db.Model):
     __tablename__ = "sale_payments"
     id = db.Column(db.Integer, primary_key=True)
     sale_id = db.Column(db.Integer, db.ForeignKey("sales.id"))
-    mode = db.Column(db.String(30), default="cash")   # cash|upi|card|bank|credit
+    mode = db.Column(db.String(30), default="cash")
     amount = db.Column(db.Float, default=0)
     reference = db.Column(db.String(120))
     paid_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -581,14 +635,36 @@ class VendorPayment(db.Model):
                 "reference": self.reference, "notes": self.notes}
 
 
+# ───────────────────  MANUFACTURER PAYMENTS 🆕 ───────────────────
+class ManufacturerPayment(db.Model):
+    __tablename__ = "manufacturer_payments"
+    id = db.Column(db.Integer, primary_key=True)
+    manufacturer_id = db.Column(db.Integer, db.ForeignKey("manufacturers.id"), nullable=False)
+    amount = db.Column(db.Float, default=0)
+    mode = db.Column(db.String(30), default="cash")
+    payment_date = db.Column(db.DateTime, default=datetime.utcnow)
+    reference = db.Column(db.String(120))
+    notes = db.Column(db.String(255))
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    manufacturer = db.relationship("Manufacturer", lazy=True)
+
+    def to_dict(self):
+        return {"id": self.id, "manufacturer_id": self.manufacturer_id,
+                "manufacturer_name": self.manufacturer.name if self.manufacturer else None,
+                "amount": self.amount, "mode": self.mode,
+                "payment_date": iso(self.payment_date),
+                "reference": self.reference, "notes": self.notes}
+
+
 # ─────────────────────  STOCK ADJUSTMENTS  ─────────────────────
 class StockAdjustment(db.Model):
     __tablename__ = "stock_adjustments"
     id = db.Column(db.Integer, primary_key=True)
     medicine_id = db.Column(db.Integer, db.ForeignKey("medicines.id"))
     batch_id = db.Column(db.Integer, db.ForeignKey("batches.id"))
-    qty_change = db.Column(db.Integer, default=0)     # +/-
-    reason = db.Column(db.String(80))                 # damaged|lost|expired|theft|count_error|opening
+    qty_change = db.Column(db.Integer, default=0)
+    reason = db.Column(db.String(80))
     notes = db.Column(db.String(255))
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -611,7 +687,7 @@ class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     user_name = db.Column(db.String(120))
-    action = db.Column(db.String(40))     # create|update|delete|login
+    action = db.Column(db.String(40))
     entity = db.Column(db.String(60))
     entity_id = db.Column(db.Integer)
     old_value = db.Column(db.Text)

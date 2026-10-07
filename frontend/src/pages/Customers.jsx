@@ -11,9 +11,12 @@ export default function Customers() {
         { key: "phone", label: "Phone" },
         { key: "age", label: "Age" },
         { key: "gender", label: "Gender" },
-        { key: "customer_type", label: "Type" },
         { key: "doctor_name", label: "Doctor" },
-        { key: "credit_limit", label: "Credit Limit" },
+        { key: "address", label: "Address", render: (r) =>
+          r.address
+            ? (r.address.length > 40 ? r.address.slice(0, 40) + "…" : r.address)
+            : "—"
+        },
       ]}
       fields={[
         { name: "name", label: "Name", required: true },
@@ -25,14 +28,7 @@ export default function Customers() {
           options: [{ value: "Male", label: "Male" }, { value: "Female", label: "Female" },
                     { value: "Other", label: "Other" }],
         },
-        {
-          name: "customer_type", label: "Customer Type", type: "select",
-          default: "retail",
-          options: ["retail", "wholesale", "hospital", "corporate", "vip", "distributor"]
-            .map((v) => ({ value: v, label: v })),
-        },
         { name: "doctor_name", label: "Referring Doctor" },
-        { name: "credit_limit", label: "Credit Limit", type: "number" },
         { name: "address", label: "Address", type: "textarea", full: true },
       ]}
     />

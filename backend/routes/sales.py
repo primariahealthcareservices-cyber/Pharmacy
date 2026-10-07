@@ -1,10 +1,11 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime
+from sqlalchemy import or_
 from extensions import db
 from models import (Sale, SaleItem, SalePayment, SalesReturn, SalesReturnItem,
                     Batch, Medicine, Customer, CustomerPayment)
 from utils.auth import role_required
-from utils.helpers import audit, parse_date, to_base_qty, money
+from utils.helpers import audit, parse_date, to_base_qty
 from flask_jwt_extended import get_jwt_identity
 
 sales_bp = Blueprint("sales", __name__)
@@ -26,27 +27,45 @@ def next_invoice_no():
     return f"INV-{datetime.utcnow().strftime('%Y%m')}-{n:05d}"
 
 
+# ───────── LIST ─────────
 @sales_bp.get("")
 @role_required()
 def list_sales():
-    q = Sale.query
+    q = (request.args.get("q") or "").strip()
+    query = Sale.query.outerjoin(Customer, Sale.customer_id == Customer.id)
+
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(
+            Sale.invoice_no.like(like),
+            Customer.name.like(like),
+            Customer.phone.like(like),
+            Sale.doctor_name.like(like),
+        ))
+
     if request.args.get("customer_id"):
-        q = q.filter(Sale.customer_id == int(request.args["customer_id"]))
+        query = query.filter(Sale.customer_id == int(request.args["customer_id"]))
     if request.args.get("from"):
-        q = q.filter(Sale.sale_date >= datetime.combine(parse_date(request.args["from"]), datetime.min.time()))
+        query = query.filter(Sale.sale_date >= datetime.combine(
+            parse_date(request.args["from"]), datetime.min.time()))
     if request.args.get("to"):
-        q = q.filter(Sale.sale_date <= datetime.combine(parse_date(request.args["to"]), datetime.max.time()))
+        query = query.filter(Sale.sale_date <= datetime.combine(
+            parse_date(request.args["to"]), datetime.max.time()))
     if request.args.get("status"):
-        q = q.filter(Sale.payment_status == request.args["status"])
-    return jsonify([s.to_dict() for s in q.order_by(Sale.id.desc()).limit(500).all()])
+        query = query.filter(Sale.payment_status == request.args["status"])
+
+    return jsonify([s.to_dict() for s in
+                    query.order_by(Sale.id.desc()).limit(500).all()])
 
 
+# ───────── GET ONE ─────────
 @sales_bp.get("/<int:sid>")
 @role_required()
 def get_sale(sid):
     return jsonify(Sale.query.get_or_404(sid).to_dict())
 
 
+# ───────── CREATE ─────────
 @sales_bp.post("")
 @role_required("super_admin", "admin", "pharmacist", "cashier", "manager")
 def create_sale():
@@ -86,7 +105,6 @@ def create_sale():
 
         batch = Batch.query.get(it["batch_id"]) if it.get("batch_id") else None
         if not batch or batch.qty < qty_base:
-            # auto-pick FIFO batch with enough stock
             batch = (Batch.query.filter(Batch.medicine_id == med.id, Batch.qty >= qty_base)
                      .order_by(Batch.exp_date.asc()).first())
         if not batch or batch.qty < qty_base:
@@ -157,6 +175,7 @@ def create_sale():
     return jsonify(sale.to_dict()), 201
 
 
+# ───────── ADD PAYMENT TO EXISTING SALE ─────────
 @sales_bp.post("/<int:sid>/payments")
 @role_required("super_admin", "admin", "cashier", "accountant", "manager")
 def add_payment(sid):
@@ -176,7 +195,7 @@ def add_payment(sid):
     return jsonify(sale.to_dict())
 
 
-# ── Sales Returns ──
+# ───────── SALES RETURNS ─────────
 @sales_bp.get("/returns/all")
 @role_required()
 def list_sales_returns():
