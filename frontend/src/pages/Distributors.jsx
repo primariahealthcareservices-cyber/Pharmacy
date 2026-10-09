@@ -6,7 +6,7 @@ import { Card, Table, Button, Input, Select, Field, Modal, Badge } from "../comp
 /* ─────────────────────────────────────────────
    Distributor Payments & Ledger sub-view
    ───────────────────────────────────────────── */
-function ManufacturerLedger() {
+function DistributorLedger() {
   const [rows, setRows] = useState([]);
   const [payments, setPayments] = useState([]);
   const [detail, setDetail] = useState(null);
@@ -23,8 +23,8 @@ function ManufacturerLedger() {
   const load = async () => {
     try {
       const [o, p] = await Promise.all([
-        api.get("/payments/outstanding/manufacturers"),
-        api.get("/payments/manufacturer"),
+        api.get("/payments/outstanding/distributors"),
+        api.get("/payments/distributor"),
       ]);
       setRows(o.data);
       setPayments(p.data);
@@ -49,8 +49,8 @@ function ManufacturerLedger() {
     const amt = Number(amount);
     if (!amt || amt <= 0) return setError("Enter a valid amount");
     try {
-      await api.post("/payments/manufacturer", {
-        manufacturer_id: target.manufacturer_id,
+      await api.post("/payments/distributor", {
+        distributor_id: target.distributor_id,
         amount: amt,
         mode,
         reference,
@@ -64,7 +64,7 @@ function ManufacturerLedger() {
 
   const viewDetail = async (r) => {
     try {
-      const { data } = await api.get(`/payments/manufacturers/${r.manufacturer_id}/summary`);
+      const { data } = await api.get(`/payments/distributors/${r.distributor_id}/summary`);
       setDetail(data);
       setDetailOpen(true);
     } catch (err) {
@@ -84,7 +84,7 @@ function ManufacturerLedger() {
       <Card title="Distributor Outstanding">
         <Table
           rows={rows}
-          keyField="manufacturer_id"
+          keyField="distributor_id"
           columns={[
             { key: "name", label: "Distributor", render: (r) => (
               <button
@@ -138,7 +138,7 @@ function ManufacturerLedger() {
           columns={[
             { key: "payment_date", label: "Date", render: (r) =>
               new Date(r.payment_date).toLocaleString() },
-            { key: "manufacturer_name", label: "Distributor" },
+            { key: "distributor_name", label: "Distributor" },
             { key: "mode", label: "Mode" },
             { key: "amount", label: "Amount", render: (r) => money(r.amount) },
             { key: "reference", label: "Ref" },
@@ -210,7 +210,7 @@ function ManufacturerLedger() {
 
       {/* ── Detail modal ── */}
       <Modal open={detailOpen} onClose={() => setDetailOpen(false)} wide
-             title={detail?.manufacturer?.name || "Distributor"}>
+             title={detail?.distributor?.name || "Distributor"}>
         {detail && (
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
@@ -271,7 +271,7 @@ function ManufacturerLedger() {
 /* ─────────────────────────────────────────────
    Distributors page — Manage + Ledger tabs
    ───────────────────────────────────────────── */
-export default function Manufacturers() {
+export default function Distributors() {
   const [view, setView] = useState("manage");
 
   return (
@@ -298,7 +298,7 @@ export default function Manufacturers() {
       {view === "manage" && (
         <CrudPage
           title="Distributors"
-          endpoint="/manufacturers"
+          endpoint="/distributors"
           searchPlaceholder="Search distributor..."
           columns={[
             { key: "name", label: "Name" },
@@ -326,7 +326,7 @@ export default function Manufacturers() {
         />
       )}
 
-      {view === "ledger" && <ManufacturerLedger />}
+      {view === "ledger" && <DistributorLedger />}
     </div>
   );
 }

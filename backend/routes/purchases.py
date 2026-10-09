@@ -140,7 +140,8 @@ def create_purchase():
         gst = _to_num(it.get("gst_rate"), med.gst_rate or 12)
         disc_pct = _to_num(it.get("discount_percent"), 0)
 
-        line_total = round(qty_base * cost_base * (1 - disc_pct / 100.0), 2)
+        # Line total is based on SELLING price (per base unit)
+        line_total = round(qty_base * sell_base * (1 - disc_pct / 100.0), 2)
         taxable = line_total / (1 + gst / 100.0) if gst else line_total
         tax_amt = round(line_total - taxable, 2)
 

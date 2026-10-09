@@ -70,13 +70,13 @@ export default function NewPurchase() {
     return 1;
   };
 
-  // Line total = qty × factor × cost/tablet × (1 - discount%)
+  // Line total = qty × factor × SELL price/tablet × (1 - discount%)
   const lineTotal = (it) => {
     const q = Number(it.quantity) || 0;
-    const c = Number(it.cost_price) || 0;
+    const s = Number(it.selling_price) || 0;
     const d = Number(it.discount_percent) || 0;
     const f = factorOf(it);
-    return q * f * c * (1 - d / 100);
+    return q * f * s * (1 - d / 100);
   };
 
   const subtotal = items.reduce((s, it) => s + lineTotal(it), 0);
@@ -304,7 +304,7 @@ export default function NewPurchase() {
                     </Field>
                   </div>
 
-                  {/* Live calculation breakdown */}
+                  {/* Live calculation breakdown — based on selling price */}
                   {Number(it.quantity) > 0 && (
                     <div className="mt-3 text-xs bg-slate-50 rounded p-2 text-slate-600">
                       <b>
@@ -316,7 +316,8 @@ export default function NewPurchase() {
                       <b>{factorOf(it)}</b> {it.base_unit}
                       {factorOf(it) === 1 ? "" : "s"}
                       {" × "}
-                      <b>{money(it.cost_price)}</b>
+                      <b>{money(it.selling_price)}</b>
+                      <span className="text-slate-400"> (sell price)</span>
                       {Number(it.discount_percent) > 0 && (
                         <>
                           {" × "}

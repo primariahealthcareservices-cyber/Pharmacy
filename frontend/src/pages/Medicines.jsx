@@ -3,7 +3,7 @@ import api, { money } from "../api/client";
 import { Card, Modal, Button, Input, Select, Field, Table, Badge } from "../components/ui";
 
 const EMPTY = {
-  name: "", generic_name: "", brand_name: "", category_id: "", manufacturer_id: "",
+  name: "", generic_name: "", brand_name: "", category_name: "", manufacturer_id: "",
   medicine_type: "Tablet", dosage_form: "", strength: "", composition: "",
   pack_type: "", description: "", hsn_code: "", is_prescription: false,
 
@@ -34,7 +34,7 @@ const NUMERIC_FLOAT = [
   "gst_rate", "mrp", "cost_price", "selling_price",
   "wholesale_price", "min_selling_price",
 ];
-const FK_FIELDS = ["category_id", "manufacturer_id"];
+const FK_FIELDS = ["manufacturer_id"];
 
 // plural helper — "tablet" → "tablets", "ml" stays "ml"
 const plural = (unit, n) => {
@@ -55,7 +55,6 @@ function toBaseQty(entryQty, entryUnit, ups, spb) {
 
 export default function Medicines() {
   const [rows, setRows] = useState([]);
-  const [categories, setCategories] = useState([]);
   const [manufacturers, setManufacturers] = useState([]);
   const [q, setQ] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
@@ -81,7 +80,6 @@ export default function Medicines() {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, lowOnly]);
 
   useEffect(() => {
-    api.get("/categories").then((r) => setCategories(r.data)).catch(() => {});
     api.get("/manufacturers").then((r) => setManufacturers(r.data)).catch(() => {});
   }, []);
 
@@ -103,6 +101,10 @@ export default function Medicines() {
     });
     if (clean.base_unit === "box" || clean.base_unit === "strip") {
       clean.base_unit = "tablet";
+    }
+    // fall back to category name from nested object if backend returns it
+    if (!clean.category_name && r.category?.name) {
+      clean.category_name = r.category.name;
     }
     setEditing(r);
     setForm(clean);
@@ -219,7 +221,7 @@ export default function Medicines() {
   };
 
   // Save current medicine, then keep the modal open with
-  // manufacturer / category / packaging defaults preserved
+  // distributor / category / packaging defaults preserved
   const saveAndAddAnother = async (e) => {
     e.preventDefault();
     setError("");
@@ -236,12 +238,12 @@ export default function Medicines() {
 
       setAddedCount((c) => c + 1);
 
-      // Keep manufacturer + category + type + packaging defaults;
+      // Keep distributor + category + type + packaging defaults;
       // clear name, prices, stock, batch, etc.
       setForm({
         ...EMPTY,
         manufacturer_id: form.manufacturer_id,
-        category_id: form.category_id,
+        category_name: form.category_name,
         medicine_type: form.medicine_type,
         base_unit: form.base_unit,
         units_per_strip: form.units_per_strip,
@@ -264,7 +266,7 @@ export default function Medicines() {
 
   const unitKey = form.init_entry_unit;
 
-  // manufacturer name for the banner
+  // distributor name for the banner
   const mfgName = manufacturers.find(
     (m) => String(m.id) === String(form.manufacturer_id)
   )?.name;
@@ -297,7 +299,7 @@ export default function Medicines() {
               </div>
             )},
             { key: "category_name", label: "Category" },
-            { key: "manufacturer_name", label: "Manufacturer" },
+            { key: "manufacturer_name", label: "Distributor" },
             { key: "pack", label: "Pack", render: (r) =>
               `${r.units_per_strip} ${r.base_unit}/strip · ${r.strips_per_box} strip/box` },
             { key: "stock", label: "Stock", render: (r) => (
@@ -364,12 +366,13 @@ export default function Medicines() {
           </Field>
 
           <Field label="Category">
-            <Select value={form.category_id} onChange={set("category_id")}>
-              <option value="">—</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
+            <Input
+              value={form.category_name}
+              onChange={set("category_name")}
+              placeholder="Enter category name"
+            />
           </Field>
-          <Field label="Manufacturer">
+          <Field label="Distributor">
             <Select value={form.manufacturer_id} onChange={set("manufacturer_id")}>
               <option value="">—</option>
               {manufacturers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
