@@ -2,7 +2,10 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 from sqlalchemy import or_
 from extensions import db
-from models import Medicine, Batch
+from models import (
+    Medicine, Batch,
+    SIMPLE_UNIT_TYPES, default_unit_for_type,
+)
 from utils.auth import role_required
 from utils.helpers import audit, parse_date
 
@@ -53,7 +56,6 @@ def _coerce(data):
         if f in FK_FIELDS:
             v = None if v in (None, "") else _to_int(v, None)
         elif f in PACK_FIELDS:
-            # packaging values must never be < 1 (used as multipliers)
             v = max(1, _to_int(v, 1))
         elif f in INT_FIELDS:
             v = _to_int(v, 0)
@@ -77,25 +79,30 @@ def _to_num(v, fallback=0.0):
 
 # ─────────── PACKAGING → BASE UNIT CONVERSION ───────────
 def _norm_unit(u):
-    """Entry unit is one of: tablet (= base unit) | strip | box."""
-    u = (u or "tablet").strip().lower()
-    return u if u in ("strip", "box") else "tablet"
+    """Entry unit is one of: base | strip | box."""
+    u = (u or "base").strip().lower()
+    if u in ("strip", "box"):
+        return u
+    return "base"
 
 
 def _to_base_units(entry_qty, entry_unit, m):
     """
-    Convert a user-entered quantity into base units (tablets / ml / ...).
+    Convert a user-entered quantity into base units.
 
-      base unit → Total = Quantity
-      strip     → Total = Strips × Units per Strip
-      box       → Total = Boxes  × Strips per Box × Units per Strip
+      base  → Total = Quantity
+      strip → Total = Strips × Units per Strip
+      box   → Total = Boxes  × Strips per Box × Units per Strip
 
-    Units per Strip / Strips per Box come from THIS medicine, so every
-    medicine can have its own pack size (10, 15, 20 ...).
+    For simple-unit medicines (Syrup / Powder / Cylinder / …) everything is 'base'.
     """
     qty = _to_int(entry_qty, 0)
     if qty <= 0:
         return 0
+
+    # 🆕 simple-unit types never have strip/box
+    if getattr(m, "is_simple_unit", False):
+        return qty
 
     ups = max(1, _to_int(m.units_per_strip, 1))
     spb = max(1, _to_int(m.strips_per_box, 1))
@@ -115,15 +122,13 @@ def _make_batch(m, d):
     Accepts either:
       - entry_qty + entry_unit  (packaging-aware)
       - qty                     (legacy — raw base units)
-    The original entry (e.g. "2 box") is stored in entry_qty/entry_unit,
-    and the normalized quantity in qty / initial_qty.
     """
     entry_unit = _norm_unit(d.get("entry_unit"))
     entry_qty = d.get("entry_qty")
 
     if entry_qty is None:
         entry_qty = d.get("qty") or 0
-        entry_unit = "tablet"
+        entry_unit = "base"
 
     entry_qty = _to_int(entry_qty, 0)
     base_qty = _to_base_units(entry_qty, entry_unit, m)
@@ -151,19 +156,32 @@ def _make_batch(m, d):
 def _resync_batches(m):
     """
     Call after units_per_strip / strips_per_box change.
-
-    Batches entered as strips/boxes get their base quantity recomputed
-    with the new packaging. Units already sold are preserved:
-        new_qty = current_qty + (new_total - old_total)
+    Simple-unit medicines have no strip/box, so skip them.
     """
+    if getattr(m, "is_simple_unit", False):
+        return
     for b in m.batches:
-        if not b.entry_qty or _norm_unit(b.entry_unit) == "tablet":
+        if not b.entry_qty or _norm_unit(b.entry_unit) == "base":
             continue
         new_base = _to_base_units(b.entry_qty, b.entry_unit, m)
         old_base = b.initial_qty or 0
         if new_base != old_base:
             b.qty = max(0, (b.qty or 0) + (new_base - old_base))
             b.initial_qty = new_base
+
+
+def _apply_simple_type_defaults(clean):
+    """
+    🆕 If medicine_type is a simple-unit type, force pack fields to 1 and
+    set base_unit to its natural unit (unless the caller explicitly set one).
+    """
+    mtype = clean.get("medicine_type")
+    if mtype in SIMPLE_UNIT_TYPES:
+        clean["units_per_strip"] = 1
+        clean["strips_per_box"] = 1
+        bu = clean.get("base_unit")
+        if not bu or bu in ("tablet", "capsule", "strip", "box"):
+            clean["base_unit"] = default_unit_for_type(mtype)
 
 
 # ───── LIST ─────
@@ -210,6 +228,9 @@ def create_medicine():
     if clean.get("base_unit") in ("strip", "box"):
         clean["base_unit"] = "tablet"
 
+    # 🆕 auto-pick a natural base unit / pack for simple-unit types
+    _apply_simple_type_defaults(clean)
+
     m = Medicine()
     for k, v in clean.items():
         setattr(m, k, v)
@@ -253,6 +274,10 @@ def update_medicine(mid):
     if clean.get("base_unit") in ("strip", "box"):
         clean["base_unit"] = "tablet"
 
+    # 🆕 If the medicine type changed to/from a simple-unit type, normalize pack
+    if "medicine_type" in clean:
+        _apply_simple_type_defaults(clean)
+
     pack_changed = any(
         k in clean and clean[k] != getattr(m, k) for k in PACK_FIELDS
     )
@@ -262,7 +287,6 @@ def update_medicine(mid):
 
     try:
         if pack_changed:
-            # keep stock consistent with the new pack size
             _resync_batches(m)
         audit("update", "medicines", mid, old, clean)
         db.session.commit()
@@ -346,7 +370,7 @@ def update_batch(mid, bid):
         b.qty = max(0, new_qty)
         b.initial_qty = max(b.initial_qty or 0, b.qty)
         b.entry_qty = b.qty
-        b.entry_unit = "tablet"
+        b.entry_unit = "base"   # 🆕 was "tablet"
 
     if "batch_no" in d and d["batch_no"]:
         b.batch_no = str(d["batch_no"]).strip()

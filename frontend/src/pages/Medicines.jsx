@@ -19,7 +19,7 @@ const EMPTY = {
 
   // stock entry
   init_qty: 0,
-  init_entry_unit: "tablet",   // tablet | strip | box
+  init_entry_unit: "tablet",   // tablet | strip | box   (or "base" for simple types)
   init_batch_no: "",
   init_mfg_date: "",
   init_exp_date: "",
@@ -36,18 +36,47 @@ const NUMERIC_FLOAT = [
 ];
 const FK_FIELDS = ["manufacturer_id"];
 
+// 🆕 Medicine types
+const MEDICINE_TYPES = [
+  "Tablet", "Capsule", "Syrup", "Injection",
+  "Ointment", "Drops", "Powder", "Inhaler", "Cylinder",
+];
+
+// 🆕 Types that behave as a single unit (no strip/box hierarchy)
+const SIMPLE_UNIT_TYPES = new Set([
+  "Syrup", "Powder", "Cylinder", "Injection",
+  "Ointment", "Drops", "Inhaler",
+]);
+
+// 🆕 Natural base unit per type
+const DEFAULT_UNIT_FOR_TYPE = {
+  Syrup: "bottle",
+  Powder: "packet",
+  Cylinder: "cylinder",
+  Injection: "vial",
+  Ointment: "tube",
+  Drops: "bottle",
+  Inhaler: "inhaler",
+  Capsule: "capsule",
+  Tablet: "tablet",
+};
+
+const isSimpleType = (t) => SIMPLE_UNIT_TYPES.has(t);
+const unitForType = (t) => DEFAULT_UNIT_FOR_TYPE[t] || "tablet";
+
 // plural helper — "tablet" → "tablets", "ml" stays "ml"
 const plural = (unit, n) => {
   if (unit === "ml") return unit;
   return n === 1 ? unit : `${unit}s`;
 };
 
-// Convert entry (tablet/strip/box) into base units
-function toBaseQty(entryQty, entryUnit, ups, spb) {
+// Convert entry (base/strip/box) into base units
+function toBaseQty(entryQty, entryUnit, ups, spb, simple = false) {
   const q = Math.floor(Number(entryQty)) || 0;
   const u = Math.max(1, Math.floor(Number(ups)) || 1);
   const s = Math.max(1, Math.floor(Number(spb)) || 1);
   if (q <= 0) return 0;
+  if (simple) return q;
   if (entryUnit === "box") return q * s * u;
   if (entryUnit === "strip") return q * u;
   return q;
@@ -65,6 +94,8 @@ export default function Medicines() {
   const [editBatchId, setEditBatchId] = useState(null);
   const [otherBatches, setOtherBatches] = useState([]);
   const [addedCount, setAddedCount] = useState(0);
+  const [deleting, setDeleting] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const load = async () => {
     try {
@@ -83,6 +114,43 @@ export default function Medicines() {
     api.get("/manufacturers").then((r) => setManufacturers(r.data)).catch(() => {});
   }, []);
 
+  // 🆕 Keep base_unit / entry unit / pack sizes in sync with medicine_type
+  useEffect(() => {
+    if (!open) return;
+    const t = form.medicine_type;
+    const simple = isSimpleType(t);
+
+    setForm((prev) => {
+      if (prev.medicine_type !== t) return prev; // guard against loop
+      const nextUnit = unitForType(t);
+
+      if (simple) {
+        if (
+          prev.base_unit === nextUnit &&
+          prev.init_entry_unit === "base" &&
+          prev.units_per_strip === 1 &&
+          prev.strips_per_box === 1
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          base_unit: nextUnit,
+          init_entry_unit: "base",
+          units_per_strip: 1,
+          strips_per_box: 1,
+        };
+      }
+
+      // non-simple: if we came from a simple type, snap back to tablet
+      if (prev.base_unit !== "tablet" && prev.base_unit !== "capsule") {
+        return { ...prev, base_unit: "tablet", init_entry_unit: "tablet" };
+      }
+      return prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.medicine_type, open]);
+
   const openCreate = () => {
     setEditing(null);
     setEditBatchId(null);
@@ -99,10 +167,18 @@ export default function Medicines() {
       if (k.startsWith("init_")) clean[k] = EMPTY[k];
       else clean[k] = r[k] !== undefined && r[k] !== null ? r[k] : EMPTY[k];
     });
+
+    // 🆕 Base unit must be the smallest unit
     if (clean.base_unit === "box" || clean.base_unit === "strip") {
-      clean.base_unit = "tablet";
+      clean.base_unit = unitForType(clean.medicine_type);
     }
-    // fall back to category name from nested object if backend returns it
+    if (isSimpleType(clean.medicine_type)) {
+      clean.base_unit = unitForType(clean.medicine_type);
+      clean.units_per_strip = 1;
+      clean.strips_per_box = 1;
+      clean.init_entry_unit = "base";
+    }
+
     if (!clean.category_name && r.category?.name) {
       clean.category_name = r.category.name;
     }
@@ -124,7 +200,7 @@ export default function Medicines() {
         setForm((prev) => ({
           ...prev,
           init_qty: hasEntry ? primary.entry_qty : primary.qty || 0,
-          init_entry_unit: hasEntry ? primary.entry_unit || "tablet" : "tablet",
+          init_entry_unit: hasEntry ? primary.entry_unit || "base" : "base",
           init_batch_no: primary.batch_no || "",
           init_mfg_date: primary.mfg_date || "",
           init_exp_date: primary.exp_date || "",
@@ -134,6 +210,47 @@ export default function Medicines() {
         }));
       }
     } catch { /* no batches */ }
+  };
+
+  // ── Delete handler ──
+  const handleDelete = async (medicine, skipConfirm = false) => {
+    if (!skipConfirm) {
+      const ok = window.confirm(
+        `Delete "${medicine.name}"?\n\nThis will remove the medicine and all its batches. This cannot be undone.`
+      );
+      if (!ok) return;
+    }
+
+    setDeleting(medicine.id);
+    try {
+      await api.delete(`/medicines/${medicine.id}`);
+      setRows((prev) => prev.filter((r) => r.id !== medicine.id));
+      load();
+    } catch (err) {
+      const status = err.response?.status;
+      const data = err.response?.data;
+
+      let msg = data?.message;
+      if (!msg) {
+        if (status === 409) {
+          msg =
+            `Cannot delete "${medicine.name}" because it is referenced by ` +
+            `existing sales, purchases or stock movements.\n\n` +
+            `Tip: edit the medicine and mark it inactive instead, so it ` +
+            `no longer appears in new transactions.`;
+        } else if (status === 500) {
+          msg =
+            `Server error while deleting "${medicine.name}".\n\n` +
+            `This usually means the medicine is referenced by other ` +
+            `records. Check the backend logs for the foreign-key error.`;
+        } else {
+          msg = `Delete failed (${status || "network"})`;
+        }
+      }
+      alert(msg);
+    } finally {
+      setDeleting(null);
+    }
   };
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -161,7 +278,9 @@ export default function Medicines() {
   const buildBatchPayload = () => ({
     batch_no: form.init_batch_no?.trim() || "OPENING",
     entry_qty: Math.floor(Number(form.init_qty)) || 0,
-    entry_unit: form.init_entry_unit || "tablet",
+    entry_unit: isSimpleType(form.medicine_type)
+      ? "base"
+      : (form.init_entry_unit || "base"),
     mfg_date: form.init_mfg_date || null,
     exp_date: form.init_exp_date || null,
     cost_price: Number(form.init_cost_price) || Number(form.cost_price) || 0,
@@ -171,12 +290,14 @@ export default function Medicines() {
   });
 
   const validateStock = () => {
+    const simple = isSimpleType(form.medicine_type);
     const upsVal = Math.max(1, Math.floor(Number(form.units_per_strip)) || 1);
     const spbVal = Math.max(1, Math.floor(Number(form.strips_per_box)) || 1);
     const qtyVal = Math.floor(Number(form.init_qty)) || 0;
 
     if (qtyVal < 0) { setError("Quantity cannot be negative."); return null; }
-    if (form.init_entry_unit !== "tablet" && qtyVal > 0 && upsVal < 1) {
+    if (simple) return qtyVal;   // 🆕 no strip/box validation
+    if (form.init_entry_unit === "strip" && qtyVal > 0 && upsVal < 1) {
       setError(`${plural(form.base_unit, 2)} per Strip must be at least 1.`);
       return null;
     }
@@ -220,8 +341,6 @@ export default function Medicines() {
     }
   };
 
-  // Save current medicine, then keep the modal open with
-  // distributor / category / packaging defaults preserved
   const saveAndAddAnother = async (e) => {
     e.preventDefault();
     setError("");
@@ -238,8 +357,6 @@ export default function Medicines() {
 
       setAddedCount((c) => c + 1);
 
-      // Keep distributor + category + type + packaging defaults;
-      // clear name, prices, stock, batch, etc.
       setForm({
         ...EMPTY,
         manufacturer_id: form.manufacturer_id,
@@ -249,6 +366,7 @@ export default function Medicines() {
         units_per_strip: form.units_per_strip,
         strips_per_box: form.strips_per_box,
         gst_rate: form.gst_rate,
+        init_entry_unit: form.init_entry_unit,
       });
 
       load();
@@ -259,14 +377,21 @@ export default function Medicines() {
   };
 
   // ── live preview ──
+  const simpleType = isSimpleType(form.medicine_type);
   const ups = Math.max(1, Math.floor(Number(form.units_per_strip)) || 1);
   const spb = Math.max(1, Math.floor(Number(form.strips_per_box)) || 1);
   const entryQty = Math.floor(Number(form.init_qty)) || 0;
-  const totalBase = toBaseQty(entryQty, form.init_entry_unit, ups, spb);
+  const totalBase = toBaseQty(
+    entryQty,
+    form.init_entry_unit,
+    ups,
+    spb,
+    simpleType,
+  );
 
-  const unitKey = form.init_entry_unit;
+  // 🆕 For simple types force display unit to "base"
+  const unitKey = simpleType ? "base" : form.init_entry_unit;
 
-  // distributor name for the banner
   const mfgName = manufacturers.find(
     (m) => String(m.id) === String(form.manufacturer_id)
   )?.name;
@@ -301,13 +426,15 @@ export default function Medicines() {
             { key: "category_name", label: "Category" },
             { key: "manufacturer_name", label: "Distributor" },
             { key: "pack", label: "Pack", render: (r) =>
-              `${r.units_per_strip} ${r.base_unit}/strip · ${r.strips_per_box} strip/box` },
+              r.is_simple_unit
+                ? `${r.units_per_strip || 1} ${r.base_unit}`
+                : `${r.units_per_strip} ${r.base_unit}/strip · ${r.strips_per_box} strip/box` },
             { key: "stock", label: "Stock", render: (r) => (
               <div>
                 <Badge tone={r.low_stock ? "red" : "green"}>
                   {r.stock} {plural(r.base_unit, r.stock)}
                 </Badge>
-                {r.stock > 0 && (
+                {r.stock > 0 && !r.is_simple_unit && (
                   <div className="text-[11px] text-slate-400 mt-0.5">
                     {r.stock} ÷ {r.units_per_strip} ={" "}
                     {Math.floor(r.stock / Math.max(1, r.units_per_strip))} strip
@@ -320,8 +447,26 @@ export default function Medicines() {
             { key: "mrp", label: "MRP/unit", render: (r) => money(r.mrp) },
             { key: "selling_price", label: "Sell/unit", render: (r) => money(r.selling_price) },
             { key: "_a", label: "", render: (r) => (
-              <button onClick={() => openEdit(r)}
-                      className="text-blue-600 text-xs font-semibold">Edit</button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => openEdit(r)}
+                  className="text-blue-600 text-xs font-semibold hover:underline"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(r)}
+                  disabled={deleting === r.id}
+                  title="Delete medicine"
+                  className={`text-xs font-semibold hover:underline ${
+                    deleting === r.id
+                      ? "text-slate-400 cursor-not-allowed"
+                      : "text-red-600"
+                  }`}
+                >
+                  {deleting === r.id ? "Deleting…" : "🗑 Delete"}
+                </button>
+              </div>
             )},
           ]}
         />
@@ -331,7 +476,6 @@ export default function Medicines() {
              title={editing ? `Edit Medicine — ${editing.name}` : "New Medicine"}>
         <form onSubmit={save} className="grid grid-cols-3 gap-4">
 
-          {/* Added-count banner */}
           {addedCount > 0 && !editing && (
             <div className="col-span-3 bg-emerald-50 border border-emerald-200 rounded p-2 text-xs text-emerald-800 flex items-center justify-between">
               <span>
@@ -348,7 +492,6 @@ export default function Medicines() {
             </div>
           )}
 
-          {/* ── Basic ── */}
           <div className="col-span-2">
             <Field label="Medicine Name *">
               <Input value={form.name} onChange={set("name")} required />
@@ -360,8 +503,7 @@ export default function Medicines() {
           <Field label="Brand"><Input value={form.brand_name} onChange={set("brand_name")} /></Field>
           <Field label="Type">
             <Select value={form.medicine_type} onChange={set("medicine_type")}>
-              {["Tablet", "Capsule", "Syrup", "Injection", "Ointment", "Drops", "Powder", "Inhaler"]
-                .map((t) => <option key={t}>{t}</option>)}
+              {MEDICINE_TYPES.map((t) => <option key={t}>{t}</option>)}
             </Select>
           </Field>
 
@@ -392,16 +534,27 @@ export default function Medicines() {
             <Field label="Description"><Input value={form.description} onChange={set("description")} /></Field>
           </div>
 
-          {/* ── Pricing ── */}
           <div className="col-span-3 border-t pt-3 mt-1">
-            <p className="text-xs font-bold uppercase text-emerald-700 mb-2">Pricing</p>
+            <p className="text-xs font-bold uppercase text-emerald-700 mb-2">
+              Pricing {simpleType && `(per ${form.base_unit})`}
+            </p>
           </div>
           <Field label="GST %"><Input type="number" value={form.gst_rate} onChange={set("gst_rate")} /></Field>
-          <Field label="Cost Price"><Input type="number" step="0.01" value={form.cost_price} onChange={set("cost_price")} /></Field>
-          <Field label="MRP"><Input type="number" step="0.01" value={form.mrp} onChange={set("mrp")} /></Field>
-          <Field label="Selling Price"><Input type="number" step="0.01" value={form.selling_price} onChange={set("selling_price")} /></Field>
-          <Field label="Wholesale Price"><Input type="number" step="0.01" value={form.wholesale_price} onChange={set("wholesale_price")} /></Field>
-          <Field label="Min Selling Price"><Input type="number" step="0.01" value={form.min_selling_price} onChange={set("min_selling_price")} /></Field>
+          <Field label={`Cost Price / ${simpleType ? form.base_unit : "unit"}`}>
+            <Input type="number" step="0.01" value={form.cost_price} onChange={set("cost_price")} />
+          </Field>
+          <Field label={`MRP / ${simpleType ? form.base_unit : "unit"}`}>
+            <Input type="number" step="0.01" value={form.mrp} onChange={set("mrp")} />
+          </Field>
+          <Field label={`Selling Price / ${simpleType ? form.base_unit : "unit"}`}>
+            <Input type="number" step="0.01" value={form.selling_price} onChange={set("selling_price")} />
+          </Field>
+          <Field label="Wholesale Price">
+            <Input type="number" step="0.01" value={form.wholesale_price} onChange={set("wholesale_price")} />
+          </Field>
+          <Field label="Min Selling Price">
+            <Input type="number" step="0.01" value={form.min_selling_price} onChange={set("min_selling_price")} />
+          </Field>
           <Field label="Reorder Level"><Input type="number" value={form.reorder_level} onChange={set("reorder_level")} /></Field>
           <Field label="Max Level"><Input type="number" value={form.max_level} onChange={set("max_level")} /></Field>
 
@@ -411,81 +564,105 @@ export default function Medicines() {
             Prescription required
           </label>
 
-          {/* ── STOCK ENTRY ── */}
           <div className="col-span-3 border-t pt-3 mt-1">
             <p className="text-xs font-bold uppercase text-emerald-700 mb-2">
               {editing ? "Stock" : "Opening Stock (optional)"}
             </p>
             <p className="text-xs text-slate-500 mb-2">
-              Pick how you&apos;re entering stock. Only the fields needed for that unit will show.
+              {simpleType
+                ? `Enter how many ${plural(form.base_unit, 2)} you have.`
+                : "Pick how you're entering stock. Only the fields needed for that unit will show."}
             </p>
           </div>
 
-          <Field label="Enter stock in">
-            <Select value={form.init_entry_unit} onChange={set("init_entry_unit")}>
-              <option value="tablet">{plural(form.base_unit, 2)}</option>
-              <option value="strip">Strips</option>
-              <option value="box">Boxes</option>
-            </Select>
-          </Field>
-
-          {/* TABLETS */}
-          {unitKey === "tablet" && (
-            <Field label={`No. of ${plural(form.base_unit, 2)}`}>
-              <Input type="number" min="0" step="1" value={form.init_qty}
-                     onChange={set("init_qty")} placeholder="0" />
-            </Field>
-          )}
-
-          {/* STRIPS */}
-          {unitKey === "strip" && (
+          {/* 🆕 Simple unit types: single qty field */}
+          {simpleType && (
             <>
-              <Field label="No. of Strips">
-                <Input type="number" min="0" step="1" value={form.init_qty}
-                       onChange={set("init_qty")} placeholder="0" />
+              <Field label={`No. of ${plural(form.base_unit, 2)}`}>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.init_qty}
+                  onChange={set("init_qty")}
+                  placeholder="0"
+                />
               </Field>
-              <Field label={`No. of ${plural(form.base_unit, 2)} per Strip`}>
-                <Input type="number" min="1" step="1" value={form.units_per_strip}
-                       onChange={set("units_per_strip")} />
-              </Field>
+              <div className="col-span-2 bg-emerald-50 rounded p-3 flex flex-col justify-center">
+                <div className="text-xs text-slate-600">Total stock</div>
+                <div className="text-xl font-bold text-emerald-700">
+                  {totalBase} {plural(form.base_unit, totalBase)}
+                </div>
+              </div>
             </>
           )}
 
-          {/* BOXES */}
-          {unitKey === "box" && (
+          {/* Tablet / Capsule etc.: original strip/box flow */}
+          {!simpleType && (
             <>
-              <Field label="No. of Boxes">
-                <Input type="number" min="0" step="1" value={form.init_qty}
-                       onChange={set("init_qty")} placeholder="0" />
+              <Field label="Enter stock in">
+                <Select value={form.init_entry_unit} onChange={set("init_entry_unit")}>
+                  <option value="tablet">{plural(form.base_unit, 2)}</option>
+                  <option value="strip">Strips</option>
+                  <option value="box">Boxes</option>
+                </Select>
               </Field>
-              <Field label="No. of Strips per Box">
-                <Input type="number" min="1" step="1" value={form.strips_per_box}
-                       onChange={set("strips_per_box")} />
-              </Field>
-              <Field label={`No. of ${plural(form.base_unit, 2)} per Strip`}>
-                <Input type="number" min="1" step="1" value={form.units_per_strip}
-                       onChange={set("units_per_strip")} />
-              </Field>
+
+              {unitKey === "tablet" && (
+                <Field label={`No. of ${plural(form.base_unit, 2)}`}>
+                  <Input type="number" min="0" step="1" value={form.init_qty}
+                         onChange={set("init_qty")} placeholder="0" />
+                </Field>
+              )}
+
+              {unitKey === "strip" && (
+                <>
+                  <Field label="No. of Strips">
+                    <Input type="number" min="0" step="1" value={form.init_qty}
+                           onChange={set("init_qty")} placeholder="0" />
+                  </Field>
+                  <Field label={`No. of ${plural(form.base_unit, 2)} per Strip`}>
+                    <Input type="number" min="1" step="1" value={form.units_per_strip}
+                           onChange={set("units_per_strip")} />
+                  </Field>
+                </>
+              )}
+
+              {unitKey === "box" && (
+                <>
+                  <Field label="No. of Boxes">
+                    <Input type="number" min="0" step="1" value={form.init_qty}
+                           onChange={set("init_qty")} placeholder="0" />
+                  </Field>
+                  <Field label="No. of Strips per Box">
+                    <Input type="number" min="1" step="1" value={form.strips_per_box}
+                           onChange={set("strips_per_box")} />
+                  </Field>
+                  <Field label={`No. of ${plural(form.base_unit, 2)} per Strip`}>
+                    <Input type="number" min="1" step="1" value={form.units_per_strip}
+                           onChange={set("units_per_strip")} />
+                  </Field>
+                </>
+              )}
+
+              <div className="col-span-3 bg-emerald-50 rounded p-3 mt-1">
+                <div className="text-xs text-slate-600">Total stock</div>
+                <div className="text-xl font-bold text-emerald-700">
+                  {totalBase} {plural(form.base_unit, totalBase)}
+                </div>
+                {unitKey === "strip" && entryQty > 0 && (
+                  <div className="text-xs text-slate-500 mt-1">
+                    {entryQty} strip{entryQty === 1 ? "" : "s"} × {ups} {form.base_unit}/strip = {totalBase} {plural(form.base_unit, totalBase)}
+                  </div>
+                )}
+                {unitKey === "box" && entryQty > 0 && (
+                  <div className="text-xs text-slate-500 mt-1">
+                    {entryQty} box{entryQty === 1 ? "" : "es"} × {spb} strips/box × {ups} {form.base_unit}/strip = {totalBase} {plural(form.base_unit, totalBase)}
+                  </div>
+                )}
+              </div>
             </>
           )}
-
-          {/* Live preview */}
-          <div className="col-span-3 bg-emerald-50 rounded p-3 mt-1">
-            <div className="text-xs text-slate-600">Total stock</div>
-            <div className="text-xl font-bold text-emerald-700">
-              {totalBase} {plural(form.base_unit, totalBase)}
-            </div>
-            {unitKey === "strip" && entryQty > 0 && (
-              <div className="text-xs text-slate-500 mt-1">
-                {entryQty} strip{entryQty === 1 ? "" : "s"} × {ups} {form.base_unit}/strip = {totalBase} {plural(form.base_unit, totalBase)}
-              </div>
-            )}
-            {unitKey === "box" && entryQty > 0 && (
-              <div className="text-xs text-slate-500 mt-1">
-                {entryQty} box{entryQty === 1 ? "" : "es"} × {spb} strips/box × {ups} {form.base_unit}/strip = {totalBase} {plural(form.base_unit, totalBase)}
-              </div>
-            )}
-          </div>
 
           <Field label="Batch No.">
             <Input value={form.init_batch_no}
@@ -500,23 +677,22 @@ export default function Medicines() {
                    onChange={set("init_mfg_date")} />
           </Field>
 
-          <Field label="Batch Cost Price">
+          <Field label={`Batch Cost Price${simpleType ? ` / ${form.base_unit}` : ""}`}>
             <Input type="number" step="0.01" value={form.init_cost_price}
                    onChange={set("init_cost_price")}
                    placeholder={String(form.cost_price || 0)} />
           </Field>
-          <Field label="Batch MRP">
+          <Field label={`Batch MRP${simpleType ? ` / ${form.base_unit}` : ""}`}>
             <Input type="number" step="0.01" value={form.init_mrp}
                    onChange={set("init_mrp")}
                    placeholder={String(form.mrp || 0)} />
           </Field>
-          <Field label="Batch Selling Price">
+          <Field label={`Batch Selling Price${simpleType ? ` / ${form.base_unit}` : ""}`}>
             <Input type="number" step="0.01" value={form.init_selling_price}
                    onChange={set("init_selling_price")}
                    placeholder={String(form.selling_price || 0)} />
           </Field>
 
-          {/* Other batches on edit */}
           {editing && otherBatches.length > 0 && (
             <>
               <div className="col-span-3 border-t pt-3 mt-1">
@@ -538,7 +714,14 @@ export default function Medicines() {
                     {otherBatches.map((b) => (
                       <tr key={b.id} className="border-b last:border-0">
                         <td className="py-1 font-medium">{b.batch_no}</td>
-                        <td>{b.entry_qty || b.qty} {b.entry_unit || "tablet"}</td>
+                        <td>
+                          {b.entry_qty || b.qty}{" "}
+                          {b.entry_unit === "box"
+                            ? "box"
+                            : b.entry_unit === "strip"
+                            ? "strip"
+                            : form.base_unit}
+                        </td>
                         <td>{b.qty} {plural(form.base_unit, b.qty)}</td>
                         <td>{b.exp_date || "—"}</td>
                       </tr>
@@ -570,6 +753,38 @@ export default function Medicines() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* ── Delete confirmation modal ── */}
+      <Modal
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        title="Delete Medicine"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-700">
+            Are you sure you want to delete <b>{confirmDelete?.name}</b>?
+            <br />
+            This will also remove all its batches and stock history.
+            <span className="text-red-600 font-semibold"> This action cannot be undone.</span>
+          </p>
+          <div className="flex justify-end gap-3 pt-3 border-t">
+            <Button variant="secondary" onClick={() => setConfirmDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={async () => {
+                const med = confirmDelete;
+                setConfirmDelete(null);
+                if (med) await handleDelete(med, true);
+              }}
+            >
+              Yes, Delete
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -45,7 +45,7 @@ class Manufacturer(db.Model):
     payment_terms = db.Column(db.String(100))
     credit_limit = db.Column(db.Float, default=0)
     bank_details = db.Column(db.Text)
-    opening_balance = db.Column(db.Float, default=0)   # 🆕
+    opening_balance = db.Column(db.Float, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     medicines = db.relationship("Medicine", backref="manufacturer", lazy=True)
@@ -125,15 +125,39 @@ class Category(db.Model):
 
 # ────────────────────────────  MEDICINES  ────────────────────────────
 def _plural(unit, n):
-    """'tablet' → 'tablets'. Units like 'ml' / 'gram' keep sensible forms."""
+    """'tablet' → 'tablets'. Units like 'ml' keep the same form."""
     unit = unit or "unit"
     if n == 1 or unit.lower() == "ml":
         return unit
     return unit + "s"
 
 
+# 🆕 Types sold as a single unit (no strip/box hierarchy)
+SIMPLE_UNIT_TYPES = {
+    "Syrup", "Powder", "Cylinder",
+    "Injection", "Ointment", "Drops", "Inhaler",
+}
+
+# 🆕 Natural base unit per medicine type
+DEFAULT_UNIT_FOR_TYPE = {
+    "syrup": "bottle",
+    "powder": "packet",
+    "cylinder": "cylinder",
+    "injection": "vial",
+    "ointment": "tube",
+    "drops": "bottle",
+    "inhaler": "inhaler",
+    "capsule": "capsule",
+    "tablet": "tablet",
+}
+
+
+def default_unit_for_type(medicine_type):
+    return DEFAULT_UNIT_FOR_TYPE.get((medicine_type or "").lower(), "tablet")
+
+
 class Medicine(db.Model):
-    """Stock is always tracked in the smallest sellable BASE UNIT (tablet / ml / unit)."""
+    """Stock is always tracked in the smallest sellable BASE UNIT (tablet / ml / bottle / ...)."""
     __tablename__ = "medicines"
     id = db.Column(db.Integer, primary_key=True)
     sku = db.Column(db.String(60), unique=True, index=True)
@@ -182,14 +206,33 @@ class Medicine(db.Model):
     def units_per_box(self):
         return (self.units_per_strip or 1) * (self.strips_per_box or 1)
 
+    # 🆕
+    @property
+    def is_simple_unit(self):
+        """True for Syrup / Powder / Cylinder etc. — no strip/box hierarchy."""
+        return (self.medicine_type or "") in SIMPLE_UNIT_TYPES
+
+    # 🆕
+    def default_base_unit(self):
+        return default_unit_for_type(self.medicine_type)
+
     def stock(self):
-        """Total stock, always normalized to base units (e.g. tablets)."""
+        """Total stock, always normalized to base units."""
         return sum((b.qty or 0) for b in self.batches)
 
     def stock_breakdown(self, total=None):
         total = self.stock() if total is None else total
         ups = max(1, self.units_per_strip or 1)
         spb = max(1, self.strips_per_box or 1)
+
+        # 🆕 simple types just report loose count
+        if self.is_simple_unit:
+            return {
+                "boxes": 0,
+                "strips": 0,
+                "loose": total,
+                "text": f"{total} {_plural(self.base_unit, total)}",
+            }
 
         strips_total, loose = divmod(total, ups)
         boxes, strips = divmod(strips_total, spb)
@@ -206,8 +249,12 @@ class Medicine(db.Model):
         if loose or not parts:
             parts.append(f"{loose} {_plural(self.base_unit, loose)}")
 
-        return {"boxes": boxes if spb > 1 else 0, "strips": strips if ups > 1 else 0,
-                "loose": loose, "text": " · ".join(parts)}
+        return {
+            "boxes": boxes if spb > 1 else 0,
+            "strips": strips if ups > 1 else 0,
+            "loose": loose,
+            "text": " · ".join(parts),
+        }
 
     def to_dict(self, with_stock=True):
         d = {
@@ -226,6 +273,9 @@ class Medicine(db.Model):
             "units_per_strip": self.units_per_strip,
             "strips_per_box": self.strips_per_box,
             "units_per_box": self.units_per_box,
+            # 🆕
+            "is_simple_unit": self.is_simple_unit,
+            "default_base_unit": self.default_base_unit(),
             "gst_rate": self.gst_rate, "mrp": self.mrp,
             "cost_price": self.cost_price, "selling_price": self.selling_price,
             "wholesale_price": self.wholesale_price,
@@ -262,7 +312,7 @@ class Batch(db.Model):
     free_qty = db.Column(db.Integer, default=0)
 
     entry_qty = db.Column(db.Integer, default=0)
-    entry_unit = db.Column(db.String(20), default="tablet")
+    entry_unit = db.Column(db.String(20), default="base")   # base | strip | box
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -272,12 +322,12 @@ class Batch(db.Model):
         n = self.entry_qty or 0
         if not n:
             return None
-        u = (self.entry_unit or "tablet").lower()
+        u = (self.entry_unit or "base").lower()
         if u == "box":
             return f"{n} {'box' if n == 1 else 'boxes'}"
         if u == "strip":
             return f"{n} {'strip' if n == 1 else 'strips'}"
-        base = self.medicine.base_unit if self.medicine else "tablet"
+        base = self.medicine.base_unit if self.medicine else "unit"
         return f"{n} {_plural(base, n)}"
 
     def to_dict(self):
@@ -635,7 +685,6 @@ class VendorPayment(db.Model):
                 "reference": self.reference, "notes": self.notes}
 
 
-# ───────────────────  MANUFACTURER PAYMENTS 🆕 ───────────────────
 class ManufacturerPayment(db.Model):
     __tablename__ = "manufacturer_payments"
     id = db.Column(db.Integer, primary_key=True)
