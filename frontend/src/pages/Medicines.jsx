@@ -7,9 +7,8 @@ const EMPTY = {
   medicine_type: "Tablet", dosage_form: "", strength: "", composition: "",
   pack_type: "", description: "", hsn_code: "", is_prescription: false,
 
-  // Base unit + defaults for stock conversion
   base_unit: "tablet",
-  units_per_strip: 10,
+  units_per_strip: 10, // Used for "Soaps per Box" when type is Soap
   strips_per_box: 10,
 
   gst_rate: 12, mrp: 0, cost_price: 0, selling_price: 0,
@@ -17,9 +16,9 @@ const EMPTY = {
   reorder_level: 50, max_level: 500,
   rack_location: "", barcode: "", sku: "", is_active: true,
 
-  // stock entry
   init_qty: 0,
-  init_entry_unit: "tablet",   // tablet | strip | box   (or "base" for simple types)
+  init_qty_box: 0, // 🆕 New field specifically for Soap boxes
+  init_entry_unit: "tablet",
   init_batch_no: "",
   init_mfg_date: "",
   init_exp_date: "",
@@ -36,20 +35,17 @@ const NUMERIC_FLOAT = [
 ];
 const FK_FIELDS = ["manufacturer_id"];
 
-// 🆕 Medicine types — Soap added
 const MEDICINE_TYPES = [
   "Tablet", "Capsule", "Syrup", "Injection",
   "Ointment", "Drops", "Powder", "Inhaler", "Cylinder",
   "Soap",
 ];
 
-// 🆕 Types that behave as a single unit (no strip/box hierarchy)
 const SIMPLE_UNIT_TYPES = new Set([
   "Syrup", "Powder", "Cylinder", "Injection",
   "Ointment", "Drops", "Inhaler", "Soap",
 ]);
 
-// 🆕 Natural base unit per type
 const DEFAULT_UNIT_FOR_TYPE = {
   Syrup: "bottle",
   Powder: "packet",
@@ -66,19 +62,23 @@ const DEFAULT_UNIT_FOR_TYPE = {
 const isSimpleType = (t) => SIMPLE_UNIT_TYPES.has(t);
 const unitForType = (t) => DEFAULT_UNIT_FOR_TYPE[t] || "tablet";
 
-// plural helper — "soap" → "soaps", "ml" stays "ml"
 const plural = (unit, n) => {
   if (unit === "ml") return unit;
   return n === 1 ? unit : `${unit}s`;
 };
 
-// Convert entry (base/strip/box) into base units
-function toBaseQty(entryQty, entryUnit, ups, spb, simple = false) {
+function toBaseQty(entryQty, entryUnit, ups, spb, simple = false, isSoap = false, boxQty = 0) {
   const q = Math.floor(Number(entryQty)) || 0;
+  const bq = Math.floor(Number(boxQty)) || 0;
   const u = Math.max(1, Math.floor(Number(ups)) || 1);
   const s = Math.max(1, Math.floor(Number(spb)) || 1);
+  
+  if (simple) {
+    if (isSoap) return q + (bq * u); // Soap: Loose soaps + (Boxes * Soaps per Box)
+    return q;
+  }
+  
   if (q <= 0) return 0;
-  if (simple) return q;
   if (entryUnit === "box") return q * s * u;
   if (entryUnit === "strip") return q * u;
   return q;
@@ -116,22 +116,25 @@ export default function Medicines() {
     api.get("/manufacturers").then((r) => setManufacturers(r.data)).catch(() => {});
   }, []);
 
-  // 🆕 Keep base_unit / entry unit / pack sizes in sync with medicine_type
   useEffect(() => {
     if (!open) return;
     const t = form.medicine_type;
     const simple = isSimpleType(t);
 
     setForm((prev) => {
-      if (prev.medicine_type !== t) return prev; // guard against loop
+      if (prev.medicine_type !== t) return prev;
       const nextUnit = unitForType(t);
 
       if (simple) {
+        const isSoap = t === "Soap";
+        const resetUnits = isSoap ? prev.units_per_strip : 1;
+        const resetStrips = isSoap ? prev.strips_per_box : 1;
+
         if (
           prev.base_unit === nextUnit &&
           prev.init_entry_unit === "base" &&
-          prev.units_per_strip === 1 &&
-          prev.strips_per_box === 1
+          prev.units_per_strip === resetUnits &&
+          prev.strips_per_box === resetStrips
         ) {
           return prev;
         }
@@ -139,18 +142,16 @@ export default function Medicines() {
           ...prev,
           base_unit: nextUnit,
           init_entry_unit: "base",
-          units_per_strip: 1,
-          strips_per_box: 1,
+          units_per_strip: resetUnits,
+          strips_per_box: resetStrips,
         };
       }
 
-      // non-simple: if we came from a simple type, snap back to tablet
       if (prev.base_unit !== "tablet" && prev.base_unit !== "capsule") {
         return { ...prev, base_unit: "tablet", init_entry_unit: "tablet" };
       }
       return prev;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.medicine_type, open]);
 
   const openCreate = () => {
@@ -170,14 +171,15 @@ export default function Medicines() {
       else clean[k] = r[k] !== undefined && r[k] !== null ? r[k] : EMPTY[k];
     });
 
-    // 🆕 Base unit must be the smallest unit
     if (clean.base_unit === "box" || clean.base_unit === "strip") {
       clean.base_unit = unitForType(clean.medicine_type);
     }
     if (isSimpleType(clean.medicine_type)) {
       clean.base_unit = unitForType(clean.medicine_type);
-      clean.units_per_strip = 1;
-      clean.strips_per_box = 1;
+      if (clean.medicine_type !== "Soap") {
+        clean.units_per_strip = 1;
+        clean.strips_per_box = 1;
+      }
       clean.init_entry_unit = "base";
     }
 
@@ -199,9 +201,22 @@ export default function Medicines() {
         setEditBatchId(primary.id);
         setOtherBatches(data.slice(1));
         const hasEntry = !!primary.entry_qty;
+        
+        // 🆕 If it's a soap and was entered as boxes, pre-fill the box field
+        let initQty = hasEntry ? primary.entry_qty : primary.qty || 0;
+        let initQtyBox = 0;
+        if (clean.medicine_type === "Soap" && hasEntry && primary.entry_unit === "box") {
+          initQtyBox = primary.entry_qty;
+          initQty = 0;
+        } else if (clean.medicine_type === "Soap" && !hasEntry) {
+           // If opening from existing stock, just put it in loose soaps
+           initQty = primary.qty || 0;
+        }
+
         setForm((prev) => ({
           ...prev,
-          init_qty: hasEntry ? primary.entry_qty : primary.qty || 0,
+          init_qty: initQty,
+          init_qty_box: initQtyBox,
           init_entry_unit: hasEntry ? primary.entry_unit || "base" : "base",
           init_batch_no: primary.batch_no || "",
           init_mfg_date: primary.mfg_date || "",
@@ -214,7 +229,6 @@ export default function Medicines() {
     } catch { /* no batches */ }
   };
 
-  // ── Delete handler ──
   const handleDelete = async (medicine, skipConfirm = false) => {
     if (!skipConfirm) {
       const ok = window.confirm(
@@ -231,23 +245,11 @@ export default function Medicines() {
     } catch (err) {
       const status = err.response?.status;
       const data = err.response?.data;
-
       let msg = data?.message;
       if (!msg) {
-        if (status === 409) {
-          msg =
-            `Cannot delete "${medicine.name}" because it is referenced by ` +
-            `existing sales, purchases or stock movements.\n\n` +
-            `Tip: edit the medicine and mark it inactive instead, so it ` +
-            `no longer appears in new transactions.`;
-        } else if (status === 500) {
-          msg =
-            `Server error while deleting "${medicine.name}".\n\n` +
-            `This usually means the medicine is referenced by other ` +
-            `records. Check the backend logs for the foreign-key error.`;
-        } else {
-          msg = `Delete failed (${status || "network"})`;
-        }
+        if (status === 409) msg = `Cannot delete "${medicine.name}" because it is referenced by existing sales, purchases or stock movements.`;
+        else if (status === 500) msg = `Server error while deleting "${medicine.name}".`;
+        else msg = `Delete failed (${status || "network"})`;
       }
       alert(msg);
     } finally {
@@ -279,9 +281,10 @@ export default function Medicines() {
 
   const buildBatchPayload = () => ({
     batch_no: form.init_batch_no?.trim() || "OPENING",
-    entry_qty: Math.floor(Number(form.init_qty)) || 0,
+    entry_qty: form.medicine_type === "Soap" ? (Math.floor(Number(form.init_qty)) || 0) : (Math.floor(Number(form.init_qty)) || 0),
+    entry_qty_box: form.medicine_type === "Soap" ? (Math.floor(Number(form.init_qty_box)) || 0) : 0, // 🆕 Send box qty
     entry_unit: isSimpleType(form.medicine_type)
-      ? "base"
+      ? (form.medicine_type === "Soap" ? "base" : "base")
       : (form.init_entry_unit || "base"),
     mfg_date: form.init_mfg_date || null,
     exp_date: form.init_exp_date || null,
@@ -296,9 +299,18 @@ export default function Medicines() {
     const upsVal = Math.max(1, Math.floor(Number(form.units_per_strip)) || 1);
     const spbVal = Math.max(1, Math.floor(Number(form.strips_per_box)) || 1);
     const qtyVal = Math.floor(Number(form.init_qty)) || 0;
+    const boxQtyVal = Math.floor(Number(form.init_qty_box)) || 0;
 
-    if (qtyVal < 0) { setError("Quantity cannot be negative."); return null; }
-    if (simple) return qtyVal;   // 🆕 no strip/box validation
+    if (qtyVal < 0 || boxQtyVal < 0) { setError("Quantity cannot be negative."); return null; }
+    
+    if (simple) {
+      if (form.medicine_type === "Soap" && boxQtyVal > 0 && upsVal < 1) {
+        setError("Soaps per Box must be at least 1.");
+        return null;
+      }
+      return qtyVal;
+    }
+    
     if (form.init_entry_unit === "strip" && qtyVal > 0 && upsVal < 1) {
       setError(`${plural(form.base_unit, 2)} per Strip must be at least 1.`);
       return null;
@@ -325,12 +337,12 @@ export default function Medicines() {
             `/medicines/${editing.id}/batches/${editBatchId}`,
             buildBatchPayload()
           );
-        } else if (qtyVal > 0) {
+        } else if (qtyVal > 0 || (form.medicine_type === "Soap" && form.init_qty_box > 0)) {
           await api.post(`/medicines/${editing.id}/batches`, buildBatchPayload());
         }
       } else {
         const payload = buildPayload();
-        if (qtyVal > 0) {
+        if (qtyVal > 0 || (form.medicine_type === "Soap" && form.init_qty_box > 0)) {
           payload.initial_batch = buildBatchPayload();
         }
         await api.post("/medicines", payload);
@@ -352,7 +364,7 @@ export default function Medicines() {
 
     try {
       const payload = buildPayload();
-      if (qtyVal > 0) {
+      if (qtyVal > 0 || (form.medicine_type === "Soap" && form.init_qty_box > 0)) {
         payload.initial_batch = buildBatchPayload();
       }
       await api.post("/medicines", payload);
@@ -378,20 +390,23 @@ export default function Medicines() {
     }
   };
 
-  // ── live preview ──
   const simpleType = isSimpleType(form.medicine_type);
+  const isSoap = form.medicine_type === "Soap";
   const ups = Math.max(1, Math.floor(Number(form.units_per_strip)) || 1);
   const spb = Math.max(1, Math.floor(Number(form.strips_per_box)) || 1);
   const entryQty = Math.floor(Number(form.init_qty)) || 0;
+  const entryBoxQty = Math.floor(Number(form.init_qty_box)) || 0;
+  
   const totalBase = toBaseQty(
     entryQty,
     form.init_entry_unit,
     ups,
     spb,
     simpleType,
+    isSoap,
+    entryBoxQty
   );
 
-  // 🆕 For simple types force display unit to "base"
   const unitKey = simpleType ? "base" : form.init_entry_unit;
 
   const mfgName = manufacturers.find(
@@ -427,10 +442,14 @@ export default function Medicines() {
             )},
             { key: "category_name", label: "Category" },
             { key: "manufacturer_name", label: "Distributor" },
-            { key: "pack", label: "Pack", render: (r) =>
-              r.is_simple_unit
+            { key: "pack", label: "Pack", render: (r) => {
+              if (r.medicine_type === "Soap") {
+                return `${r.units_per_strip || 1} ${r.base_unit} / box`;
+              }
+              return r.is_simple_unit
                 ? `${r.units_per_strip || 1} ${r.base_unit}`
-                : `${r.units_per_strip} ${r.base_unit}/strip · ${r.strips_per_box} strip/box` },
+                : `${r.units_per_strip} ${r.base_unit}/strip · ${r.strips_per_box} strip/box`;
+            }},
             { key: "stock", label: "Stock", render: (r) => (
               <div>
                 <Badge tone={r.low_stock ? "red" : "green"}>
@@ -577,8 +596,8 @@ export default function Medicines() {
             </p>
           </div>
 
-          {/* 🆕 Simple unit types (Syrup / Soap / Powder / …): single qty field */}
-          {simpleType && (
+          {/* 🆕 Simple unit types (Syrup / Powder / …) EXCEPT Soap: single qty field */}
+          {simpleType && !isSoap && (
             <>
               <Field label={`No. of ${plural(form.base_unit, 2)}`}>
                 <Input
@@ -595,6 +614,39 @@ export default function Medicines() {
                 <div className="text-xl font-bold text-emerald-700">
                   {totalBase} {plural(form.base_unit, totalBase)}
                 </div>
+              </div>
+            </>
+          )}
+
+          {/* 🆕 Soap: Separate fields for Soaps and Boxes at the same time */}
+          {isSoap && (
+            <>
+              <Field label={`No. of ${plural(form.base_unit, 2)}`}>
+                <Input type="number" min="0" step="1" value={form.init_qty}
+                       onChange={set("init_qty")} placeholder="0" />
+              </Field>
+              <Field label="No. of Boxes">
+                <Input type="number" min="0" step="1" value={form.init_qty_box}
+                       onChange={set("init_qty_box")} placeholder="0" />
+              </Field>
+              <Field label={`No. of ${plural(form.base_unit, 2)} per Box`}>
+                <Input type="number" min="1" step="1" value={form.units_per_strip}
+                       onChange={set("units_per_strip")} />
+              </Field>
+
+              <div className="col-span-3 bg-emerald-50 rounded p-3 mt-1">
+                <div className="text-xs text-slate-600">Total stock</div>
+                <div className="text-xl font-bold text-emerald-700">
+                  {totalBase} {plural(form.base_unit, totalBase)}
+                </div>
+                {(entryQty > 0 || entryBoxQty > 0) && (
+                  <div className="text-xs text-slate-500 mt-1">
+                    {entryQty > 0 && <>{entryQty} loose {plural(form.base_unit, entryQty)}</>}
+                    {entryQty > 0 && entryBoxQty > 0 && " + "}
+                    {entryBoxQty > 0 && <>{entryBoxQty} box{entryBoxQty === 1 ? "" : "es"} × {ups} = {entryBoxQty * ups} {plural(form.base_unit, entryBoxQty * ups)}</>}
+                    {" = "} {totalBase} {plural(form.base_unit, totalBase)}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -717,7 +769,7 @@ export default function Medicines() {
                       <tr key={b.id} className="border-b last:border-0">
                         <td className="py-1 font-medium">{b.batch_no}</td>
                         <td>
-                          {b.entry_qty || b.qty}{" "}
+                                                    {b.entry_qty || b.qty}{" "}
                           {b.entry_unit === "box"
                             ? "box"
                             : b.entry_unit === "strip"

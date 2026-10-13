@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 from sqlalchemy import or_
 from extensions import db
 from models import (
-    Medicine, Batch, Category,
+    Medicine, Batch, Category, Manufacturer,
     SIMPLE_UNIT_TYPES, default_unit_for_type,
 )
 from utils.auth import role_required
@@ -108,15 +108,34 @@ def _norm_unit(u):
     return "base"
 
 
-def _to_base_units(entry_qty, entry_unit, m):
+def _to_base_units(entry_qty, entry_unit, m, entry_qty_box=0):
+    """
+    Convert the entered quantity to base units.
+    For Soap, entry_qty_box is multiplied by units_per_strip (Soaps per Box).
+    """
     qty = _to_int(entry_qty, 0)
+    box_qty = _to_int(entry_qty_box, 0)
+    
+    # 🆕 SPECIAL SOAP LOGIC
+    if getattr(m, "medicine_type", None) == "Soap":
+        ups = max(1, _to_int(m.units_per_strip, 1))  # "Soaps per Box"
+        if qty <= 0 and box_qty <= 0:
+            return 0
+        return qty + (box_qty * ups)
+    
+    # Simple unit types (Syrup, Powder, etc.)
+    if getattr(m, "is_simple_unit", False):
+        if qty <= 0:
+            return 0
+        return qty
+
+    # Regular tablet/capsule logic
     if qty <= 0:
         return 0
-    if getattr(m, "is_simple_unit", False):
-        return qty
     ups = max(1, _to_int(m.units_per_strip, 1))
     spb = max(1, _to_int(m.strips_per_box, 1))
     unit = _norm_unit(entry_unit)
+    
     if unit == "box":
         return qty * spb * ups
     if unit == "strip":
@@ -127,15 +146,27 @@ def _to_base_units(entry_qty, entry_unit, m):
 def _make_batch(m, d):
     entry_unit = _norm_unit(d.get("entry_unit"))
     entry_qty = d.get("entry_qty")
+    entry_qty_box = d.get("entry_qty_box", 0)
 
-    if entry_qty is None:
+    if entry_qty is None and entry_qty_box is None:
         entry_qty = d.get("qty") or 0
         entry_unit = "base"
 
     entry_qty = _to_int(entry_qty, 0)
-    base_qty = _to_base_units(entry_qty, entry_unit, m)
+    entry_qty_box = _to_int(entry_qty_box, 0)
+    
+    base_qty = _to_base_units(entry_qty, entry_unit, m, entry_qty_box)
     if base_qty <= 0:
         return None
+
+    # For Soap, we store the total entry count (loose + boxes) as entry_qty
+    # and store "base" as the unit to keep it simple.
+    if m.medicine_type == "Soap":
+        stored_entry_qty = entry_qty + entry_qty_box
+        stored_entry_unit = "base"
+    else:
+        stored_entry_qty = entry_qty
+        stored_entry_unit = entry_unit
 
     return Batch(
         medicine_id=m.id,
@@ -150,18 +181,18 @@ def _make_batch(m, d):
         qty=base_qty,
         initial_qty=base_qty,
         free_qty=_to_int(d.get("free_qty"), 0),
-        entry_qty=entry_qty,
-        entry_unit=entry_unit,
+        entry_qty=stored_entry_qty,
+        entry_unit=stored_entry_unit,
     )
 
 
 def _resync_batches(m):
-    if getattr(m, "is_simple_unit", False):
+    if getattr(m, "is_simple_unit", False) and m.medicine_type != "Soap":
         return
     for b in m.batches:
-        if not b.entry_qty or _norm_unit(b.entry_unit) == "base":
+        if not b.entry_qty:
             continue
-        new_base = _to_base_units(b.entry_qty, b.entry_unit, m)
+        new_base = _to_base_units(b.entry_qty, b.entry_unit, m, 0)
         old_base = b.initial_qty or 0
         if new_base != old_base:
             b.qty = max(0, (b.qty or 0) + (new_base - old_base))
@@ -171,8 +202,11 @@ def _resync_batches(m):
 def _apply_simple_type_defaults(clean):
     mtype = clean.get("medicine_type")
     if mtype in SIMPLE_UNIT_TYPES:
-        clean["units_per_strip"] = 1
+        # For Soap, we keep units_per_strip (Soaps per Box). For others, reset to 1.
+        if mtype != "Soap":
+            clean["units_per_strip"] = 1
         clean["strips_per_box"] = 1
+        
         bu = clean.get("base_unit")
         if not bu or bu in ("tablet", "capsule", "strip", "box"):
             clean["base_unit"] = default_unit_for_type(mtype)
@@ -184,15 +218,19 @@ def _apply_simple_type_defaults(clean):
 def list_medicines():
     q = (request.args.get("q") or "").strip()
     query = Medicine.query
+
     if q:
         like = f"%{q}%"
+        query = query.outerjoin(Manufacturer, Medicine.manufacturer_id == Manufacturer.id)
         query = query.filter(or_(
             Medicine.name.like(like),
             Medicine.generic_name.like(like),
             Medicine.sku.like(like),
             Medicine.barcode.like(like),
             Medicine.brand_name.like(like),
+            Manufacturer.name.like(like),
         ))
+
     if request.args.get("category_id"):
         query = query.filter(Medicine.category_id == int(request.args["category_id"]))
     if request.args.get("manufacturer_id"):
@@ -217,11 +255,9 @@ def create_medicine():
     if not d.get("name"):
         return jsonify({"message": "name is required"}), 400
 
-    # pull batch_data from a COPY so `d` keeps category_name etc.
     batch_data = d.get("initial_batch") or {}
     clean = _coerce(d)
 
-    # resolve category_name → category_id
     cat_id = _ensure_category(d)
     if cat_id is not None:
         clean["category_id"] = cat_id
@@ -372,13 +408,26 @@ def update_batch(mid, bid):
     b = Batch.query.filter_by(id=bid, medicine_id=m.id).first_or_404()
     d = request.get_json(silent=True) or {}
 
-    if "entry_qty" in d or "entry_unit" in d:
+    # 🆕 Handle Soap-specific updates where entry_qty_box is provided
+    if m.medicine_type == "Soap" and ("entry_qty" in d or "entry_qty_box" in d):
+        new_qty = _to_int(d.get("entry_qty", 0), 0)
+        new_box_qty = _to_int(d.get("entry_qty_box", 0), 0)
+        new_base = _to_base_units(new_qty, "base", m, new_box_qty)
+
+        if b.qty:
+            old_base = b.initial_qty or 0
+            b.qty = max(0, (b.qty or 0) + (new_base - old_base))
+        b.initial_qty = new_base
+        b.entry_qty = new_qty + new_box_qty
+        b.entry_unit = "base"
+        
+    elif "entry_qty" in d or "entry_unit" in d:
         new_unit = _norm_unit(d.get("entry_unit") or b.entry_unit)
         new_entry = _to_int(d.get("entry_qty", b.entry_qty), 0)
-        new_base = _to_base_units(new_entry, new_unit, m)
+        new_base = _to_base_units(new_entry, new_unit, m, 0)
 
         if b.entry_qty:
-            old_base = _to_base_units(b.entry_qty, b.entry_unit, m)
+            old_base = _to_base_units(b.entry_qty, b.entry_unit, m, 0)
             b.qty = max(0, (b.qty or 0) + (new_base - old_base))
             b.initial_qty = new_base
         else:

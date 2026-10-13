@@ -364,6 +364,19 @@ export default function POS() {
 function InvoiceView({ sale }) {
   const totalInWords = numberToWords(sale.total);
 
+  // Set the document title so "Save as PDF" uses the Customer name
+  useEffect(() => {
+    const originalTitle = document.title;
+    // Replace any characters that aren't letters, numbers, or spaces with an underscore
+    const safeCustomerName = (sale.customer_name || "Walk-in_Customer").replace(/[^a-z0-9]/gi, '_');
+    
+    document.title = safeCustomerName;
+    
+    return () => {
+      document.title = originalTitle;
+    };
+  }, [sale]);
+
   return (
     <div className="print-invoice bg-white text-slate-900 text-[11px] font-sans">
       {/* Outer bordered wrapper */}
@@ -379,14 +392,12 @@ function InvoiceView({ sale }) {
                    onError={(e) => { e.currentTarget.style.display = "none"; }} />
               <div>
                 <div className="font-bold text-[13px] leading-tight">
-                  PRIMARIA Pharmacy
+                  PRIMARIA PHARMACY
                 </div>
-                <div className="leading-tight">Retail Pharmacy</div>
-                <div className="leading-tight">Main Road, Your City</div>
-                <div className="leading-tight">Phone: 9876543210</div>
-                <div className="leading-tight">Email: care@primaria.in</div>
-                <div className="leading-tight">GSTIN: 29ABCDE1234F1Z5</div>
-                <div className="leading-tight">D.L. No: 20B/21B-12345</div>
+                <div className="leading-tight">5/8 Brodipet, Guntur, AP</div>
+                <div className="leading-tight">Phone: 9247966505</div>
+                <div className="leading-tight">Email: info@primariacare.com</div>
+                <div className="leading-tight">GSTIN: 37AAQCP012B1ZT</div>
               </div>
             </div>
           </div>
@@ -517,7 +528,7 @@ function InvoiceView({ sale }) {
             <div>Thank you for your visit!</div>
           </div>
           <div className="text-right">
-            <div className="font-bold">For PRIMARIA HEALTH CARE</div>
+            <div className="font-bold">For PRIMARIA PHARMACY</div>
             <div className="mt-4">Authorised Signatory</div>
           </div>
         </div>

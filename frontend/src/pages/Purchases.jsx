@@ -182,6 +182,19 @@ export default function Purchases() {
 function PurchaseInvoiceView({ purchase }) {
   const totalInWords = numberToWords(purchase.total);
 
+  // Set the document title so "Save as PDF" uses only the Vendor name
+  useEffect(() => {
+    const originalTitle = document.title;
+    // Replace any characters that aren't letters, numbers, or spaces with an underscore
+    const safeVendorName = (purchase.vendor_name || "Vendor").replace(/[^a-z0-9]/gi, '_');
+    
+    document.title = safeVendorName;
+    
+    return () => {
+      document.title = originalTitle;
+    };
+  }, [purchase]);
+
   return (
     <div className="print-invoice bg-white text-slate-900 text-[11px] font-sans">
       <div className="border border-slate-800">
@@ -195,14 +208,12 @@ function PurchaseInvoiceView({ purchase }) {
                    onError={(e) => { e.currentTarget.style.display = "none"; }} />
               <div>
                 <div className="font-bold text-[13px] leading-tight">
-                  PRIMARIA HEALTH CARE
+                  PRIMARIA PHARMACY
                 </div>
-                <div className="leading-tight">Retail Pharmacy</div>
-                <div className="leading-tight">Main Road, Your City</div>
-                <div className="leading-tight">Phone: 9876543210</div>
-                <div className="leading-tight">Email: care@primaria.in</div>
-                <div className="leading-tight">GSTIN: 29ABCDE1234F1Z5</div>
-                <div className="leading-tight">D.L. No: 20B/21B-12345</div>
+                <div className="leading-tight">5/8 Brodipet, Guntur, AP</div>
+                <div className="leading-tight">Phone: 9247966505</div>
+                <div className="leading-tight">Email: info@primariacare.com</div>
+                <div className="leading-tight">GSTIN: 37AAQCP012B1ZT</div>
               </div>
             </div>
           </div>
@@ -302,7 +313,7 @@ function PurchaseInvoiceView({ purchase }) {
             <div>Please verify quantity before signing.</div>
           </div>
           <div className="text-right">
-            <div className="font-bold">For PRIMARIA HEALTH CARE</div>
+            <div className="font-bold">For PRIMARIA PHARMACY</div>
             <div className="mt-4">Received By</div>
           </div>
         </div>

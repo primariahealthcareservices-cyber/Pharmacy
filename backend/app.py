@@ -24,6 +24,7 @@ def create_app():
     from routes.payments import payments_bp
     from routes.dashboard import dashboard_bp
     from routes.reports import reports_bp
+    from routes.reference_medicines import reference_medicines_bp   # ← NEW
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(masters_bp, url_prefix="/api")
@@ -35,6 +36,7 @@ def create_app():
     app.register_blueprint(payments_bp, url_prefix="/api/payments")
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
     app.register_blueprint(reports_bp, url_prefix="/api/reports")
+    app.register_blueprint(reference_medicines_bp, url_prefix="/api/reference-medicines")  # ← NEW
 
     @app.get("/api/health")
     def health():

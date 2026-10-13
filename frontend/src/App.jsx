@@ -4,6 +4,7 @@ import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Medicines from "./pages/Medicines";
+import ReferenceMedicines from "./pages/ReferenceMedicines";   // ← NEW
 import Manufacturers from "./pages/Manufacturers";
 import Vendors from "./pages/Vendors";
 import Customers from "./pages/Customers";
@@ -30,6 +31,7 @@ export default function App() {
       <Route element={<Protected><Layout /></Protected>}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/medicines" element={<Medicines />} />
+        <Route path="/reference-medicines" element={<ReferenceMedicines />} />   {/* ← NEW */}
         <Route path="/manufacturers" element={<Manufacturers />} />
         <Route path="/vendors" element={<Vendors />} />
         <Route path="/customers" element={<Customers />} />

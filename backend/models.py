@@ -123,6 +123,32 @@ class Category(db.Model):
         return {"id": self.id, "name": self.name, "description": self.description}
 
 
+# ─────────────────────  REFERENCE MEDICINES  ─────────────────────
+class ReferenceMedicine(db.Model):
+    __tablename__ = "reference_medicines"
+    id = db.Column(db.Integer, primary_key=True)
+    company = db.Column(db.String(200), nullable=False, index=True)
+    product_name = db.Column(db.String(200), nullable=False, index=True)
+    pack = db.Column(db.String(120))
+    quantity = db.Column(db.Integer, default=0)
+    discount_offer = db.Column(db.String(120))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "company": self.company,
+            "product_name": self.product_name,
+            "pack": self.pack,
+            "quantity": self.quantity or 0,
+            "discount_offer": self.discount_offer,
+            "created_at": iso(self.created_at),
+            "updated_at": iso(self.updated_at),
+        }
+
+
 # ────────────────────────────  MEDICINES  ────────────────────────────
 def _plural(unit, n):
     """'tablet' → 'tablets'. Units like 'ml' keep the same form."""
@@ -132,14 +158,12 @@ def _plural(unit, n):
     return unit + "s"
 
 
-# 🆕 Types sold as a single unit (no strip/box hierarchy)
 SIMPLE_UNIT_TYPES = {
     "Syrup", "Powder", "Cylinder",
     "Injection", "Ointment", "Drops", "Inhaler",
-    "Soap",   # 🆕 added
+    "Soap",
 }
 
-# 🆕 Natural base unit per medicine type
 DEFAULT_UNIT_FOR_TYPE = {
     "syrup": "bottle",
     "powder": "packet",
@@ -150,7 +174,7 @@ DEFAULT_UNIT_FOR_TYPE = {
     "inhaler": "inhaler",
     "capsule": "capsule",
     "tablet": "tablet",
-    "soap": "soap",   # 🆕 added
+    "soap": "soap",
 }
 
 
@@ -179,12 +203,10 @@ class Medicine(db.Model):
     hsn_code = db.Column(db.String(20))
     is_prescription = db.Column(db.Boolean, default=False)
 
-    # ── Packaging hierarchy ──
     base_unit = db.Column(db.String(20), default="tablet")
     units_per_strip = db.Column(db.Integer, default=1)
     strips_per_box = db.Column(db.Integer, default=1)
 
-    # ── Pricing (all per BASE UNIT) ──
     gst_rate = db.Column(db.Float, default=12)
     mrp = db.Column(db.Float, default=0)
     cost_price = db.Column(db.Float, default=0)
@@ -192,7 +214,6 @@ class Medicine(db.Model):
     wholesale_price = db.Column(db.Float, default=0)
     min_selling_price = db.Column(db.Float, default=0)
 
-    # ── Stock control (base units) ──
     reorder_level = db.Column(db.Integer, default=0)
     max_level = db.Column(db.Integer, default=0)
     rack_location = db.Column(db.String(60))
@@ -208,18 +229,14 @@ class Medicine(db.Model):
     def units_per_box(self):
         return (self.units_per_strip or 1) * (self.strips_per_box or 1)
 
-    # 🆕
     @property
     def is_simple_unit(self):
-        """True for Syrup / Powder / Cylinder / Soap etc. — no strip/box hierarchy."""
         return (self.medicine_type or "") in SIMPLE_UNIT_TYPES
 
-    # 🆕
     def default_base_unit(self):
         return default_unit_for_type(self.medicine_type)
 
     def stock(self):
-        """Total stock, always normalized to base units."""
         return sum((b.qty or 0) for b in self.batches)
 
     def stock_breakdown(self, total=None):
@@ -227,7 +244,6 @@ class Medicine(db.Model):
         ups = max(1, self.units_per_strip or 1)
         spb = max(1, self.strips_per_box or 1)
 
-        # 🆕 simple types just report loose count
         if self.is_simple_unit:
             return {
                 "boxes": 0,
@@ -275,7 +291,6 @@ class Medicine(db.Model):
             "units_per_strip": self.units_per_strip,
             "strips_per_box": self.strips_per_box,
             "units_per_box": self.units_per_box,
-            # 🆕
             "is_simple_unit": self.is_simple_unit,
             "default_base_unit": self.default_base_unit(),
             "gst_rate": self.gst_rate, "mrp": self.mrp,
@@ -314,7 +329,7 @@ class Batch(db.Model):
     free_qty = db.Column(db.Integer, default=0)
 
     entry_qty = db.Column(db.Integer, default=0)
-    entry_unit = db.Column(db.String(20), default="base")   # base | strip | box
+    entry_unit = db.Column(db.String(20), default="base")
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -724,12 +739,18 @@ class StockAdjustment(db.Model):
     batch = db.relationship("Batch", lazy=True)
 
     def to_dict(self):
-        return {"id": self.id, "medicine_id": self.medicine_id,
-                "medicine_name": self.medicine.name if self.medicine else None,
-                "batch_id": self.batch_id,
-                "batch_no": self.batch.batch_no if self.batch else None,
-                "qty_change": self.qty_change, "reason": self.reason,
-                "notes": self.notes, "created_at": iso(self.created_at)}
+        return {
+            "id": self.id,
+            "medicine_id": self.medicine_id,
+            "medicine_name": self.medicine.name if self.medicine else None,
+            "batch_id": self.batch_id,
+            "batch_no": self.batch.batch_no if self.batch else None,
+            "qty_change": self.qty_change,
+            "reason": self.reason,
+            "notes": self.notes,
+            "created_at": iso(self.created_at),
+        }
+
 
 # ─────────────────────────  AUDIT LOG  ─────────────────────────
 class AuditLog(db.Model):
@@ -746,8 +767,15 @@ class AuditLog(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
 
     def to_dict(self):
-        return {"id": self.id, "user_id": self.user_id,
-                "user_name": self.user_name, "action": self.action,
-                "entity": self.entity, "entity_id": self.entity_id,
-                "old_value": self.old_value, "new_value": self.new_value,
-                "ip": self.ip, "created_at": iso(self.created_at)}
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "user_name": self.user_name,
+            "action": self.action,
+            "entity": self.entity,
+            "entity_id": self.entity_id,
+            "old_value": self.old_value,
+            "new_value": self.new_value,
+            "ip": self.ip,
+            "created_at": iso(self.created_at),
+        }     
