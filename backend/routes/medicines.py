@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 from sqlalchemy import or_
 from extensions import db
 from models import (
-    Medicine, Batch,
+    Medicine, Batch, Category,
     SIMPLE_UNIT_TYPES, default_unit_for_type,
 )
 from utils.auth import role_required
@@ -36,13 +36,20 @@ PACK_FIELDS = {"units_per_strip", "strips_per_box"}
 
 
 def _to_int(v, default=0):
-    """Safe int conversion that also accepts '2', '2.0', 2.0, None, ''."""
     try:
         if v in (None, ""):
             return default
         return int(float(v))
     except (TypeError, ValueError):
         return default
+
+
+def _to_bool(v):
+    if isinstance(v, bool):
+        return v
+    if v in (None, ""):
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 def _coerce(data):
@@ -65,7 +72,7 @@ def _coerce(data):
             except (TypeError, ValueError):
                 v = 0.0
         elif f in BOOL_FIELDS:
-            v = bool(v)
+            v = _to_bool(v)
         out[f] = v
     return out
 
@@ -77,9 +84,24 @@ def _to_num(v, fallback=0.0):
         return float(fallback or 0)
 
 
+def _ensure_category(data):
+    """Resolve category_id from category_name; create if missing."""
+    cid = data.get("category_id")
+    if cid not in (None, ""):
+        return _to_int(cid, None)
+    cname = (data.get("category_name") or "").strip()
+    if not cname:
+        return None
+    cat = Category.query.filter(Category.name.ilike(cname)).first()
+    if not cat:
+        cat = Category(name=cname)
+        db.session.add(cat)
+        db.session.flush()
+    return cat.id
+
+
 # ─────────── PACKAGING → BASE UNIT CONVERSION ───────────
 def _norm_unit(u):
-    """Entry unit is one of: base | strip | box."""
     u = (u or "base").strip().lower()
     if u in ("strip", "box"):
         return u
@@ -87,26 +109,13 @@ def _norm_unit(u):
 
 
 def _to_base_units(entry_qty, entry_unit, m):
-    """
-    Convert a user-entered quantity into base units.
-
-      base  → Total = Quantity
-      strip → Total = Strips × Units per Strip
-      box   → Total = Boxes  × Strips per Box × Units per Strip
-
-    For simple-unit medicines (Syrup / Powder / Cylinder / …) everything is 'base'.
-    """
     qty = _to_int(entry_qty, 0)
     if qty <= 0:
         return 0
-
-    # 🆕 simple-unit types never have strip/box
     if getattr(m, "is_simple_unit", False):
         return qty
-
     ups = max(1, _to_int(m.units_per_strip, 1))
     spb = max(1, _to_int(m.strips_per_box, 1))
-
     unit = _norm_unit(entry_unit)
     if unit == "box":
         return qty * spb * ups
@@ -116,13 +125,6 @@ def _to_base_units(entry_qty, entry_unit, m):
 
 
 def _make_batch(m, d):
-    """
-    Build a Batch from a request payload.
-
-    Accepts either:
-      - entry_qty + entry_unit  (packaging-aware)
-      - qty                     (legacy — raw base units)
-    """
     entry_unit = _norm_unit(d.get("entry_unit"))
     entry_qty = d.get("entry_qty")
 
@@ -154,10 +156,6 @@ def _make_batch(m, d):
 
 
 def _resync_batches(m):
-    """
-    Call after units_per_strip / strips_per_box change.
-    Simple-unit medicines have no strip/box, so skip them.
-    """
     if getattr(m, "is_simple_unit", False):
         return
     for b in m.batches:
@@ -171,10 +169,6 @@ def _resync_batches(m):
 
 
 def _apply_simple_type_defaults(clean):
-    """
-    🆕 If medicine_type is a simple-unit type, force pack fields to 1 and
-    set base_unit to its natural unit (unless the caller explicitly set one).
-    """
     mtype = clean.get("medicine_type")
     if mtype in SIMPLE_UNIT_TYPES:
         clean["units_per_strip"] = 1
@@ -218,17 +212,23 @@ def list_medicines():
 @role_required("super_admin", "admin", "inventory_manager")
 def create_medicine():
     d = request.get_json(silent=True) or {}
+    print("[/api/medicines POST] payload =", d)
+
     if not d.get("name"):
         return jsonify({"message": "name is required"}), 400
 
-    batch_data = d.pop("initial_batch", None) or {}
+    # pull batch_data from a COPY so `d` keeps category_name etc.
+    batch_data = d.get("initial_batch") or {}
     clean = _coerce(d)
 
-    # Guard: base_unit must be the smallest unit, never strip/box
+    # resolve category_name → category_id
+    cat_id = _ensure_category(d)
+    if cat_id is not None:
+        clean["category_id"] = cat_id
+
     if clean.get("base_unit") in ("strip", "box"):
         clean["base_unit"] = "tablet"
 
-    # 🆕 auto-pick a natural base unit / pack for simple-unit types
     _apply_simple_type_defaults(clean)
 
     m = Medicine()
@@ -248,7 +248,13 @@ def create_medicine():
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        return jsonify({"message": "Failed to create medicine", "error": str(e)}), 400
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "message": "Failed to create medicine",
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 400
     return jsonify(m.to_dict()), 201
 
 
@@ -269,12 +275,17 @@ def update_medicine(mid):
     m = Medicine.query.get_or_404(mid)
     old = m.to_dict(False)
     d = request.get_json(silent=True) or {}
+    print(f"[/api/medicines PUT {mid}] payload =", d)
+
     clean = _coerce(d)
+
+    cat_id = _ensure_category(d)
+    if cat_id is not None:
+        clean["category_id"] = cat_id
 
     if clean.get("base_unit") in ("strip", "box"):
         clean["base_unit"] = "tablet"
 
-    # 🆕 If the medicine type changed to/from a simple-unit type, normalize pack
     if "medicine_type" in clean:
         _apply_simple_type_defaults(clean)
 
@@ -292,7 +303,13 @@ def update_medicine(mid):
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        return jsonify({"message": "Failed to update medicine", "error": str(e)}), 400
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "message": "Failed to update medicine",
+            "error": str(e),
+            "type": type(e).__name__,
+        }), 400
     return jsonify(m.to_dict())
 
 
@@ -301,9 +318,16 @@ def update_medicine(mid):
 @role_required("super_admin", "admin")
 def delete_medicine(mid):
     m = Medicine.query.get_or_404(mid)
-    audit("delete", "medicines", mid, m.to_dict(False))
-    db.session.delete(m)
-    db.session.commit()
+    try:
+        audit("delete", "medicines", mid, m.to_dict(False))
+        db.session.delete(m)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "message": "Cannot delete medicine — it may be referenced by sales, purchases, or stock records.",
+            "error": str(e),
+        }), 409
     return jsonify({"message": "deleted"})
 
 
@@ -354,12 +378,10 @@ def update_batch(mid, bid):
         new_base = _to_base_units(new_entry, new_unit, m)
 
         if b.entry_qty:
-            # Apply only the DIFFERENCE so units already sold stay deducted.
             old_base = _to_base_units(b.entry_qty, b.entry_unit, m)
             b.qty = max(0, (b.qty or 0) + (new_base - old_base))
             b.initial_qty = new_base
         else:
-            # Legacy batch (no entry info): the value shown/edited was current stock.
             b.qty = new_base
             b.initial_qty = max(b.initial_qty or 0, new_base)
 
@@ -370,7 +392,7 @@ def update_batch(mid, bid):
         b.qty = max(0, new_qty)
         b.initial_qty = max(b.initial_qty or 0, b.qty)
         b.entry_qty = b.qty
-        b.entry_unit = "base"   # 🆕 was "tablet"
+        b.entry_unit = "base"
 
     if "batch_no" in d and d["batch_no"]:
         b.batch_no = str(d["batch_no"]).strip()

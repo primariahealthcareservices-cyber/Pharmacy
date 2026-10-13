@@ -36,16 +36,17 @@ const NUMERIC_FLOAT = [
 ];
 const FK_FIELDS = ["manufacturer_id"];
 
-// 🆕 Medicine types
+// 🆕 Medicine types — Soap added
 const MEDICINE_TYPES = [
   "Tablet", "Capsule", "Syrup", "Injection",
   "Ointment", "Drops", "Powder", "Inhaler", "Cylinder",
+  "Soap",
 ];
 
 // 🆕 Types that behave as a single unit (no strip/box hierarchy)
 const SIMPLE_UNIT_TYPES = new Set([
   "Syrup", "Powder", "Cylinder", "Injection",
-  "Ointment", "Drops", "Inhaler",
+  "Ointment", "Drops", "Inhaler", "Soap",
 ]);
 
 // 🆕 Natural base unit per type
@@ -59,12 +60,13 @@ const DEFAULT_UNIT_FOR_TYPE = {
   Inhaler: "inhaler",
   Capsule: "capsule",
   Tablet: "tablet",
+  Soap: "soap",
 };
 
 const isSimpleType = (t) => SIMPLE_UNIT_TYPES.has(t);
 const unitForType = (t) => DEFAULT_UNIT_FOR_TYPE[t] || "tablet";
 
-// plural helper — "tablet" → "tablets", "ml" stays "ml"
+// plural helper — "soap" → "soaps", "ml" stays "ml"
 const plural = (unit, n) => {
   if (unit === "ml") return unit;
   return n === 1 ? unit : `${unit}s`;
@@ -575,7 +577,7 @@ export default function Medicines() {
             </p>
           </div>
 
-          {/* 🆕 Simple unit types: single qty field */}
+          {/* 🆕 Simple unit types (Syrup / Soap / Powder / …): single qty field */}
           {simpleType && (
             <>
               <Field label={`No. of ${plural(form.base_unit, 2)}`}>

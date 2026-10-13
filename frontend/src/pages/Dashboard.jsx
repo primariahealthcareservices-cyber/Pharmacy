@@ -8,18 +8,53 @@ import {
 
 const COLORS = ["#059669", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#14b8a6"];
 
+// 🆕 Safe defaults so a partial/empty response never crashes the page
+const EMPTY_TODAY = { sales: 0, profit: 0, purchases: 0, expenses: 0 };
+const EMPTY_MONTH = { revenue: 0, net_profit: 0, expenses: 0 };
+const EMPTY_STOCK = {
+  total_value: 0, total_products: 0,
+  expired: 0, expiring_30: 0, low_stock: 0,
+};
+const EMPTY_PENDING = { customer_payments: 0, vendor_payments: 0 };
+
 export default function Dashboard() {
   const [s, setS] = useState(null);
   const [charts, setCharts] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    api.get("/dashboard/summary").then((r) => setS(r.data));
-    api.get("/dashboard/charts").then((r) => setCharts(r.data));
+    api.get("/dashboard/summary")
+      .then((r) => {
+        console.log("dashboard/summary:", r.data);   // 🆕 debug
+        setS(r.data);
+      })
+      .catch((err) => {
+        console.error("dashboard/summary failed:", err.response?.data || err.message);
+        setError("Failed to load dashboard summary.");
+      });
+
+    api.get("/dashboard/charts")
+      .then((r) => setCharts(r.data))
+      .catch((err) => {
+        console.error("dashboard/charts failed:", err.response?.data || err.message);
+      });
   }, []);
 
+  if (error) return <p className="text-red-600">{error}</p>;
   if (!s) return <p className="text-slate-500">Loading dashboard…</p>;
 
-  const modeData = Object.entries(s.collections_today || {}).map(([k, v]) => ({ name: k, value: v }));
+  // 🆕 Merge with safe defaults — works even if backend omits a key
+  const today = { ...EMPTY_TODAY, ...(s.today || {}) };
+  const month = { ...EMPTY_MONTH, ...(s.month || {}) };
+  const stock = { ...EMPTY_STOCK, ...(s.stock || {}) };
+  const pending = { ...EMPTY_PENDING, ...(s.pending || {}) };
+  const topSelling = Array.isArray(s.top_selling) ? s.top_selling : [];
+  const collectionsToday = s.collections_today || {};
+
+  const modeData = Object.entries(collectionsToday).map(([k, v]) => ({
+    name: k,
+    value: v,
+  }));
 
   return (
     <div>
@@ -30,33 +65,33 @@ export default function Dashboard() {
 
       {/* Row 1 — Today */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <Stat label="Today's Sales" value={money(s.today.sales)} tone="green" />
-        <Stat label="Today's Profit" value={money(s.today.profit)} tone="blue" />
-        <Stat label="Today's Purchases" value={money(s.today.purchases)} tone="amber" />
-        <Stat label="Today's Expenses" value={money(s.today.expenses)} tone="red" />
+        <Stat label="Today's Sales" value={money(today.sales)} tone="green" />
+        <Stat label="Today's Profit" value={money(today.profit)} tone="blue" />
+        <Stat label="Today's Purchases" value={money(today.purchases)} tone="amber" />
+        <Stat label="Today's Expenses" value={money(today.expenses)} tone="red" />
       </div>
 
       {/* Row 2 — Month + Stock */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <Stat label="Month Revenue" value={money(s.month.revenue)} tone="green" />
-        <Stat label="Month Net Profit" value={money(s.month.net_profit)} tone="violet"
-              sub={`Expenses ${money(s.month.expenses)}`} />
-        <Stat label="Stock Value (Cost)" value={money(s.stock.total_value)} tone="slate"
-              sub={`${s.stock.total_products} products`} />
-        <Stat label="Pending Payments" value={money(s.pending.customer_payments)} tone="amber"
-              sub={`Vendor due ${money(s.pending.vendor_payments)}`} />
+        <Stat label="Month Revenue" value={money(month.revenue)} tone="green" />
+        <Stat label="Month Net Profit" value={money(month.net_profit)} tone="violet"
+              sub={`Expenses ${money(month.expenses)}`} />
+        <Stat label="Stock Value (Cost)" value={money(stock.total_value)} tone="slate"
+              sub={`${stock.total_products} products`} />
+        <Stat label="Pending Payments" value={money(pending.customer_payments)} tone="amber"
+              sub={`Vendor due ${money(pending.vendor_payments)}`} />
       </div>
 
       {/* Row 3 — Alerts */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <Card title="🔴 Expired Batches">
-          <p className="text-3xl font-bold text-red-600">{s.stock.expired}</p>
+          <p className="text-3xl font-bold text-red-600">{stock.expired}</p>
         </Card>
         <Card title="🟠 Expiring in 30 days">
-          <p className="text-3xl font-bold text-amber-600">{s.stock.expiring_30}</p>
+          <p className="text-3xl font-bold text-amber-600">{stock.expiring_30}</p>
         </Card>
         <Card title="🟡 Low Stock Products">
-          <p className="text-3xl font-bold text-yellow-600">{s.stock.low_stock}</p>
+          <p className="text-3xl font-bold text-yellow-600">{stock.low_stock}</p>
         </Card>
       </div>
 
@@ -67,7 +102,7 @@ export default function Dashboard() {
             <LineChart data={charts?.daily || []}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }}
-                     tickFormatter={(v) => v.slice(5)} />
+                     tickFormatter={(v) => String(v).slice(5)} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v) => money(v)} />
               <Legend />
@@ -98,7 +133,8 @@ export default function Dashboard() {
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={charts?.daily || []}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(v) => v.slice(5)} />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }}
+                     tickFormatter={(v) => String(v).slice(5)} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v) => money(v)} />
               <Legend />
@@ -109,11 +145,11 @@ export default function Dashboard() {
         </Card>
 
         <Card title="Top Selling Medicines (30 days)">
-          {s.top_selling.length === 0 ? (
+          {topSelling.length === 0 ? (
             <p className="text-slate-400 text-sm py-10 text-center">No sales yet</p>
           ) : (
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={s.top_selling} layout="vertical">
+              <BarChart data={topSelling} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis type="number" tick={{ fontSize: 11 }} />
                 <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />

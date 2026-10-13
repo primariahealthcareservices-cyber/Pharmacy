@@ -172,14 +172,12 @@ function InvoiceView({ sale }) {
                    onError={(e) => { e.currentTarget.style.display = "none"; }} />
               <div>
                 <div className="font-bold text-[13px] leading-tight">
-                  PRIMARIA HEALTH CARE
+                  PRIMARIA PHARMACY
                 </div>
-                <div className="leading-tight">Retail Pharmacy</div>
-                <div className="leading-tight">Main Road, Your City</div>
-                <div className="leading-tight">Phone: 9876543210</div>
-                <div className="leading-tight">Email: care@primaria.in</div>
-                <div className="leading-tight">GSTIN: 29ABCDE1234F1Z5</div>
-                <div className="leading-tight">D.L. No: 20B/21B-12345</div>
+                <div className="leading-tight">5/8 Brodipet, Guntur, AP</div>
+                <div className="leading-tight">Phone: 9247966505</div>
+                <div className="leading-tight">Email: info@primariacare.com</div>
+                <div className="leading-tight">GSTIN: 37AAQCP012B1ZT</div>
               </div>
             </div>
           </div>
@@ -282,14 +280,14 @@ function InvoiceView({ sale }) {
             <div>Thank you for your visit!</div>
           </div>
           <div className="text-right">
-            <div className="font-bold">For PRIMARIA HEALTH CARE</div>
+            <div className="font-bold">For PRIMARIA HEALTHCARE</div>
             <div className="mt-4">Authorised Signatory</div>
           </div>
         </div>
       </div>
 
       <div className="flex justify-end gap-3 mt-4 print:hidden">
-        <Button variant="secondary" onClick={() => window.print()}>🖨 Print</Button>
+        <Button variant="secondary" onClick={() => handlePrint(sale)}>🖨 Print</Button>
       </div>
     </div>
   );
@@ -302,4 +300,23 @@ function Row({ label, value }) {
       <span className="font-medium text-right">{value}</span>
     </div>
   );
+}
+
+/* 🆕 Print helper — sets document.title to ONLY the customer name,
+   so the browser's "Save as PDF" dialog suggests "<Customer>.pdf".
+   Restores the original title after the print dialog closes. */
+function handlePrint(sale) {
+  const patient = (sale.customer_name || "Walk-in").trim();
+  const safe = (patient || "Invoice").replace(/[\\/:*?"<>|]+/g, "-");
+
+  const prevTitle = document.title;
+  document.title = safe;
+  window.print();
+
+  const restore = () => {
+    document.title = prevTitle;
+    window.removeEventListener("afterprint", restore);
+  };
+  window.addEventListener("afterprint", restore);
+  setTimeout(restore, 1000);   // safety net for browsers that don't fire afterprint
 }

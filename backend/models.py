@@ -136,6 +136,7 @@ def _plural(unit, n):
 SIMPLE_UNIT_TYPES = {
     "Syrup", "Powder", "Cylinder",
     "Injection", "Ointment", "Drops", "Inhaler",
+    "Soap",   # 🆕 added
 }
 
 # 🆕 Natural base unit per medicine type
@@ -149,6 +150,7 @@ DEFAULT_UNIT_FOR_TYPE = {
     "inhaler": "inhaler",
     "capsule": "capsule",
     "tablet": "tablet",
+    "soap": "soap",   # 🆕 added
 }
 
 
@@ -209,7 +211,7 @@ class Medicine(db.Model):
     # 🆕
     @property
     def is_simple_unit(self):
-        """True for Syrup / Powder / Cylinder etc. — no strip/box hierarchy."""
+        """True for Syrup / Powder / Cylinder / Soap etc. — no strip/box hierarchy."""
         return (self.medicine_type or "") in SIMPLE_UNIT_TYPES
 
     # 🆕
@@ -728,7 +730,6 @@ class StockAdjustment(db.Model):
                 "batch_no": self.batch.batch_no if self.batch else None,
                 "qty_change": self.qty_change, "reason": self.reason,
                 "notes": self.notes, "created_at": iso(self.created_at)}
-
 
 # ─────────────────────────  AUDIT LOG  ─────────────────────────
 class AuditLog(db.Model):
