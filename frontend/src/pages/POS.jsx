@@ -13,13 +13,11 @@ function twoDigits(n) {
   if (n < 20) return ONES[n];
   return TENS[Math.floor(n / 10)] + (n % 10 ? " " + ONES[n % 10] : "");
 }
-
 function threeDigits(n) {
   const h = Math.floor(n / 100);
   const r = n % 100;
   return (h ? ONES[h] + " Hundred" + (r ? " " : "") : "") + (r ? twoDigits(r) : "");
 }
-
 function numberToWords(num) {
   num = Math.floor(Number(num) || 0);
   if (num === 0) return "Zero";
@@ -35,6 +33,34 @@ function numberToWords(num) {
   return parts.join(" ");
 }
 
+/* ─────────── Payment method label helper ─────────── */
+function paymentModeLabel(mode) {
+  const m = String(mode || "").toLowerCase();
+  switch (m) {
+    case "cash": return "Cash";
+    case "phonepe": return "PhonePe";
+    case "gpay": return "Google Pay";
+    case "paytm": return "Paytm";
+    case "amazonpay": return "Amazon Pay";
+    case "bhim": return "BHIM UPI";
+    case "card": return "Card";
+    case "netbanking": return "Net Banking";
+    case "upi": return "UPI";
+    default: return mode ? m.charAt(0).toUpperCase() + m.slice(1) : "—";
+  }
+}
+
+/* ─────────── Clean reference (strip "Last4:xxxx") ─────────── */
+function cleanReference(ref) {
+  if (!ref) return "";
+  // Remove "Last4:1234" and trailing separators
+  return ref
+    .split("|")
+    .map((s) => s.trim())
+    .filter((s) => s && !s.toLowerCase().startsWith("last4:"))
+    .join(" | ");
+}
+
 /* ─────────── Main POS component ─────────── */
 export default function POS() {
   const [search, setSearch] = useState("");
@@ -44,10 +70,19 @@ export default function POS() {
   const [customerId, setCustomerId] = useState("");
   const [invoice, setInvoice] = useState(null);
   const [error, setError] = useState("");
-  const [cash, setCash] = useState("");
-  const [upi, setUpi] = useState("");
-  const [card, setCard] = useState("");
   const [globalDiscount, setGlobalDiscount] = useState(0);
+
+  const [useCash, setUseCash] = useState(true);
+  const [useOnline, setUseOnline] = useState(false);
+  const [cash, setCash] = useState("");
+
+  /* ✅ Online method default to phonepe */
+  const [onlineMethod, setOnlineMethod] = useState("phonepe");
+  const [online, setOnline] = useState("");
+  const [onlineRef, setOnlineRef] = useState("");
+  const [onlineLast4, setOnlineLast4] = useState("");
+
+  const [successInvoice, setSuccessInvoice] = useState(null);
 
   useEffect(() => {
     api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {});
@@ -120,12 +155,47 @@ export default function POS() {
 
   const subtotal = cart.reduce((s, it) => s + lineCalc(it).total, 0);
   const total = Math.max(0, subtotal - Number(globalDiscount || 0));
-  const paid = Number(cash || 0) + Number(upi || 0) + Number(card || 0);
+
+  const cashAmt = useCash ? Number(cash || 0) : 0;
+  const onlineAmt = useOnline ? Number(online || 0) : 0;
+  const paid = cashAmt + onlineAmt;
   const change = paid - total;
+
+  /* ✅ Only keep UTR (no Last4) */
+  const buildOnlineReference = () => {
+    if (onlineRef.trim()) return `UTR:${onlineRef.trim()}`;
+    return null;
+  };
+
+  const resetForm = () => {
+    setCart([]);
+    setUseCash(true);
+    setUseOnline(false);
+    setCash("");
+    setOnline("");
+    setOnlineRef("");
+    setOnlineLast4("");
+    setOnlineMethod("phonepe");
+    setGlobalDiscount(0);
+    setCustomerId("");
+  };
 
   const checkout = async () => {
     setError("");
     if (cart.length === 0) return setError("Cart is empty");
+
+    if (!useCash && !useOnline) {
+      return setError("Please select a payment method (Cash or Online)");
+    }
+    if (useCash && Number(cash) <= 0 && !useOnline) {
+      return setError("Please enter a cash amount");
+    }
+    if (useOnline && Number(online) <= 0) {
+      return setError("Please enter the online payment amount");
+    }
+    if (useOnline && !onlineRef.trim()) {
+      return setError("Please enter the UTR / Transaction ID");
+    }
 
     for (const it of cart) {
       const { qtyBase } = lineCalc(it);
@@ -137,9 +207,16 @@ export default function POS() {
     }
 
     const payments = [];
-    if (Number(cash) > 0) payments.push({ mode: "cash", amount: Number(cash) });
-    if (Number(upi) > 0) payments.push({ mode: "upi", amount: Number(upi) });
-    if (Number(card) > 0) payments.push({ mode: "card", amount: Number(card) });
+    if (useCash && cashAmt > 0) {
+      payments.push({ mode: "cash", amount: cashAmt });
+    }
+    if (useOnline && onlineAmt > 0) {
+      payments.push({
+        mode: onlineMethod,
+        amount: onlineAmt,
+        reference: buildOnlineReference(),
+      });
+    }
 
     const payload = {
       customer_id: customerId ? Number(customerId) : null,
@@ -158,9 +235,8 @@ export default function POS() {
 
     try {
       const { data } = await api.post("/sales", payload);
-      setInvoice(data);
-      setCart([]); setCash(""); setUpi(""); setCard("");
-      setGlobalDiscount(0); setCustomerId("");
+      setSuccessInvoice(data);
+      resetForm();
     } catch (e) {
       setError(e.response?.data?.message || "Checkout failed");
     }
@@ -267,9 +343,6 @@ export default function POS() {
                       </Field>
                       <div className="self-end pb-2 text-xs text-slate-500">
                         = <b className="text-slate-800">{qtyBase}</b> {it.base_unit}s
-                        {factor > 1 && (
-                          <> · 1 {it.unit === "base" ? it.base_unit : it.unit} = <b>{factor}</b> {it.base_unit}s</>
-                        )}
                       </div>
                     </div>
 
@@ -310,6 +383,7 @@ export default function POS() {
         </div>
       </div>
 
+      {/* RIGHT COLUMN */}
       <div className="space-y-4">
         <Card title="Customer">
           <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
@@ -324,14 +398,83 @@ export default function POS() {
 
         <Card title="Payment">
           <div className="space-y-3">
-            <Field label="Cash"><Input type="number" value={cash}
-                   onChange={(e) => setCash(e.target.value)} /></Field>
-            <Field label="UPI"><Input type="number" value={upi}
-                   onChange={(e) => setUpi(e.target.value)} /></Field>
-            <Field label="Card"><Input type="number" value={card}
-                   onChange={(e) => setCard(e.target.value)} /></Field>
-            <Field label="Extra Discount"><Input type="number" value={globalDiscount}
-                   onChange={(e) => setGlobalDiscount(e.target.value)} /></Field>
+            <div className="flex flex-wrap gap-4 items-center">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={useCash}
+                  onChange={(e) => {
+                    setUseCash(e.target.checked);
+                    if (!e.target.checked) setCash("");
+                  }}
+                  className="w-4 h-4 accent-emerald-600"
+                />
+                <span className="text-sm font-semibold text-slate-700">Cash</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={useOnline}
+                  onChange={(e) => {
+                    setUseOnline(e.target.checked);
+                    if (!e.target.checked) {
+                      setOnline(""); setOnlineRef(""); setOnlineLast4("");
+                    }
+                  }}
+                  className="w-4 h-4 accent-blue-600"
+                />
+                <span className="text-sm font-semibold text-slate-700">Online Payment</span>
+              </label>
+            </div>
+
+            {useCash && (
+              <div className="ml-2 pl-3 border-l-2 border-emerald-400 bg-emerald-50/50 rounded p-2 space-y-2">
+                <Field label="Cash Amount *">
+                  <Input type="number" placeholder="Enter cash received"
+                         value={cash}
+                         onChange={(e) => setCash(e.target.value)} />
+                </Field>
+              </div>
+            )}
+
+            {useOnline && (
+              <div className="ml-2 pl-3 border-l-2 border-blue-400 bg-blue-50/50 rounded p-2 space-y-2">
+                <Field label="Online Method *">
+                  {/* ✅ NEW: Specific apps */}
+                  <Select value={onlineMethod}
+                          onChange={(e) => setOnlineMethod(e.target.value)}>
+                    <option value="phonepe">PhonePe</option>
+                    <option value="gpay">Google Pay</option>
+                    <option value="paytm">Paytm</option>
+                    <option value="amazonpay">Amazon Pay</option>
+                    <option value="bhim">BHIM UPI</option>
+                    <option value="upi">Other UPI</option>
+                    <option value="card">Card</option>
+                    <option value="netbanking">Net Banking</option>
+                  </Select>
+                </Field>
+
+                <Field label="Amount Paid *">
+                  <Input type="number" placeholder="Enter amount"
+                         value={online}
+                         onChange={(e) => setOnline(e.target.value)} />
+                </Field>
+
+                <Field label="UTR / Transaction ID *">
+                  <Input
+                    placeholder="e.g. 123456789012"
+                    value={onlineRef}
+                    onChange={(e) => setOnlineRef(e.target.value)}
+                  />
+                </Field>
+              </div>
+            )}
+
+            <Field label="Extra Discount">
+              <Input type="number" value={globalDiscount}
+                     onChange={(e) => setGlobalDiscount(e.target.value)} />
+            </Field>
           </div>
         </Card>
 
@@ -353,6 +496,103 @@ export default function POS() {
         </Card>
       </div>
 
+      {/* SUCCESS POPUP */}
+      <Modal
+        open={!!successInvoice}
+        onClose={() => setSuccessInvoice(null)}
+        title=""
+      >
+        {successInvoice && (
+          <div className="text-center space-y-4 py-2">
+            <div className="mx-auto w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg"
+                     className="h-7 w-7 text-white" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd"
+                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                        clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
+
+            <h2 className="text-xl font-bold text-emerald-700">
+              Payment Completed!
+            </h2>
+
+            <p className="text-sm text-slate-600">
+              Invoice <b className="text-slate-900">{successInvoice.invoice_no}</b> has been created.
+            </p>
+
+            <div className="bg-slate-50 rounded-lg p-4 text-sm space-y-2 text-left">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Customer</span>
+                <span className="font-semibold">
+                  {successInvoice.customer_name || "Walk-in"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Total</span>
+                <span className="font-semibold">{money(successInvoice.total)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Paid</span>
+                <span className="font-semibold text-emerald-700">
+                  {money(successInvoice.paid_amount)}
+                </span>
+              </div>
+              {successInvoice.due_amount > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Balance Due</span>
+                  <span className="font-semibold text-red-600">
+                    {money(successInvoice.due_amount)}
+                  </span>
+                </div>
+              )}
+
+              {Array.isArray(successInvoice.payments) && successInvoice.payments.length > 0 && (
+                <div className="border-t border-slate-200 pt-2 mt-2">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold mb-1">
+                    Payment Details
+                  </div>
+                  {successInvoice.payments.map((p, i) => (
+                    <div key={i} className="text-xs border-b border-slate-100 py-1 last:border-0">
+                      <div className="flex justify-between">
+                        {/* ✅ Show app name like PhonePe */}
+                        <span className="font-semibold text-slate-700">
+                          {paymentModeLabel(p.mode)}
+                        </span>
+                        <span className="font-semibold">{money(p.amount)}</span>
+                      </div>
+                      {p.reference && (
+                        <div className="text-[10px] text-slate-500 mt-0.5 break-all">
+                          {cleanReference(p.reference)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-center gap-3 pt-2">
+              <Button variant="secondary" onClick={() => setSuccessInvoice(null)}>
+                New Sale
+              </Button>
+              <Button
+                onClick={() => {
+                  const inv = successInvoice;
+                  setSuccessInvoice(null);
+                  setInvoice(inv);
+                }}
+              >
+                View / Print Invoice
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* INVOICE MODAL */}
       <Modal open={!!invoice} onClose={() => setInvoice(null)} title="Invoice" wide>
         {invoice && <InvoiceView sale={invoice} />}
       </Modal>
@@ -364,27 +604,27 @@ export default function POS() {
 function InvoiceView({ sale }) {
   const totalInWords = numberToWords(sale.total);
 
-  // Set the document title so "Save as PDF" uses the Customer name
   useEffect(() => {
     const originalTitle = document.title;
-    // Replace any characters that aren't letters, numbers, or spaces with an underscore
     const safeCustomerName = (sale.customer_name || "Walk-in_Customer").replace(/[^a-z0-9]/gi, '_');
-    
     document.title = safeCustomerName;
-    
-    return () => {
-      document.title = originalTitle;
-    };
+    return () => { document.title = originalTitle; };
   }, [sale]);
+
+  const payments = Array.isArray(sale.payments) ? sale.payments : [];
+  const hasCash = payments.some((p) => (p.mode || "").toLowerCase() === "cash");
+  const hasOnline = payments.some((p) => (p.mode || "").toLowerCase() !== "cash");
+  const overallPaymentType =
+    hasCash && hasOnline ? "Cash + Online"
+    : hasOnline ? "Online Payment"
+    : "Cash";
 
   return (
     <div className="print-invoice bg-white text-slate-900 text-[11px] font-sans">
-      {/* Outer bordered wrapper */}
       <div className="border border-slate-800">
 
-        {/* ─── Header ─── */}
+        {/* Header */}
         <div className="grid grid-cols-12 border-b border-slate-800">
-          {/* Left: logo + company */}
           <div className="col-span-6 p-2 border-r border-slate-800">
             <div className="flex items-start gap-2">
               <img src="/primaria.png" alt="Primaria"
@@ -402,7 +642,6 @@ function InvoiceView({ sale }) {
             </div>
           </div>
 
-          {/* Middle: TAX INVOICE */}
           <div className="col-span-3 p-2 border-r border-slate-800 flex flex-col items-center justify-center text-center">
             <div className="font-bold text-[14px] tracking-wider">** TAX INVOICE **</div>
             <div className="mt-1 text-[10px]">
@@ -411,16 +650,15 @@ function InvoiceView({ sale }) {
             </div>
           </div>
 
-          {/* Right: invoice meta */}
           <div className="col-span-3 p-2">
             <Row label="Bill No:" value={sale.invoice_no} />
             <Row label="Date:" value={new Date(sale.sale_date).toLocaleDateString("en-IN")} />
             <Row label="Time:" value={new Date(sale.sale_date).toLocaleTimeString("en-IN")} />
-            <Row label="Payment:" value={(sale.payment_mode || "cash").toUpperCase()} />
+            <Row label="Payment:" value={overallPaymentType} />
           </div>
         </div>
 
-        {/* ─── Customer / To ─── */}
+        {/* Customer */}
         <div className="grid grid-cols-12 border-b border-slate-800">
           <div className="col-span-6 p-2 border-r border-slate-800">
             <div className="font-bold">To,</div>
@@ -437,7 +675,7 @@ function InvoiceView({ sale }) {
           </div>
         </div>
 
-        {/* ─── Items table ─── */}
+        {/* Items */}
         <table className="w-full border-collapse">
           <thead>
             <tr className="bg-slate-100 border-b border-slate-800">
@@ -458,50 +696,28 @@ function InvoiceView({ sale }) {
             {sale.items.map((it, i) => (
               <tr key={it.id} className="border-b border-slate-300">
                 <td className="border-r border-slate-300 px-1 py-0.5 text-center">{i + 1}</td>
-                <td className="border-r border-slate-300 px-1 py-0.5">
-                  {it.medicine_name}
-                </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-center">
-                  {it.hsn_code || "-"}
-                </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-center">
-                  {it.batch_no}
-                </td>
+                <td className="border-r border-slate-300 px-1 py-0.5">{it.medicine_name}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.hsn_code || "-"}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.batch_no}</td>
                 <td className="border-r border-slate-300 px-1 py-0.5 text-center">
                   {it.exp_date ? it.exp_date.slice(2, 7) : "-"}
                 </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-center">
-                  {it.quantity}
-                </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-right">
-                  {money(it.mrp)}
-                </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-right">
-                  {money(it.selling_price)}
-                </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-right">
-                  {it.discount_percent || 0}
-                </td>
-                <td className="border-r border-slate-300 px-1 py-0.5 text-right">
-                  {it.gst_rate || 12}
-                </td>
-                <td className="px-1 py-0.5 text-right font-semibold">
-                  {money(it.line_total)}
-                </td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.quantity}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{money(it.mrp)}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{money(it.selling_price)}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{it.discount_percent || 0}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{it.gst_rate || 12}</td>
+                <td className="px-1 py-0.5 text-right font-semibold">{money(it.line_total)}</td>
               </tr>
             ))}
           </tbody>
         </table>
 
-        {/* ─── Totals + Words ─── */}
+        {/* Totals */}
         <div className="grid grid-cols-12 border-t border-slate-800">
           <div className="col-span-7 p-2 border-r border-slate-800">
-            <div className="text-[10px] uppercase font-bold text-slate-600">
-              Amount in words
-            </div>
-            <div className="font-semibold">
-              Rupees {totalInWords} Only
-            </div>
+            <div className="text-[10px] uppercase font-bold text-slate-600">Amount in words</div>
+            <div className="font-semibold">Rupees {totalInWords} Only</div>
           </div>
           <div className="col-span-5 p-2 text-[11px]">
             <Row label="Sub Total:" value={money(sale.sub_total)} />
@@ -521,7 +737,42 @@ function InvoiceView({ sale }) {
           </div>
         </div>
 
-        {/* ─── Footer ─── */}
+        {/* ✅ Payment Details — app name, no Last4 */}
+        {payments.length > 0 && (
+          <div className="border-t border-slate-800 p-2">
+            <div className="text-[10px] uppercase font-bold text-slate-600 mb-1">
+              Payment Details
+            </div>
+            <table className="w-full text-[10px] border-collapse">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="border border-slate-300 px-1 py-0.5 text-left">Method</th>
+                  <th className="border border-slate-300 px-1 py-0.5 text-right">Amount</th>
+                  <th className="border border-slate-300 px-1 py-0.5 text-left">UTR / Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((p) => (
+                  <tr key={p.id}>
+                    {/* ✅ Human-friendly label (PhonePe, Google Pay, Cash, …) */}
+                    <td className="border border-slate-300 px-1 py-0.5">
+                      {paymentModeLabel(p.mode)}
+                    </td>
+                    <td className="border border-slate-300 px-1 py-0.5 text-right">
+                      {money(p.amount)}
+                    </td>
+                    <td className="border border-slate-300 px-1 py-0.5 break-all">
+                      {/* ✅ Hide Last4 from reference */}
+                      {cleanReference(p.reference) || "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Footer */}
         <div className="border-t border-slate-800 p-2 flex justify-between text-[10px]">
           <div>
             <div>Goods once sold will not be taken back.</div>
@@ -534,7 +785,6 @@ function InvoiceView({ sale }) {
         </div>
       </div>
 
-      {/* Print button — hidden when printing */}
       <div className="flex justify-end gap-3 mt-4 print:hidden">
         <Button variant="secondary" onClick={() => window.print()}>
           🖨 Print
