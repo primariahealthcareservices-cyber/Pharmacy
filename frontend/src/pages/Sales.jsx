@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import api, { money } from "../api/client";
 import { Card, Table, Badge, Modal, Button, Input, Select, Field } from "../components/ui";
 
@@ -44,7 +44,6 @@ function isOnlineMode(mode) {
   return ONLINE_MODES.includes(String(mode || "").trim().toLowerCase());
 }
 
-/* ✅ Human-friendly label */
 function paymentModeLabel(mode) {
   const m = String(mode || "").toLowerCase();
   switch (m) {
@@ -69,7 +68,6 @@ function paymentModeLabel(mode) {
   }
 }
 
-/* ✅ Strip "Last4:xxxx" from reference */
 function cleanReference(ref) {
   if (!ref) return "";
   return ref
@@ -79,7 +77,6 @@ function cleanReference(ref) {
     .join(" | ");
 }
 
-/* ✅ Compute overall payment summary from payments[] */
 function overallPaymentSummary(sale) {
   const payments = Array.isArray(sale.payments) ? sale.payments : [];
   if (payments.length === 0) {
@@ -91,6 +88,101 @@ function overallPaymentSummary(sale) {
   if (hasCash && hasOnline) return "Cash + Online";
   if (hasOnline) return "Online";
   return "Cash";
+}
+
+/* ─────────── Pagination helper ─────────── */
+const PAGE_SIZE = 25;
+
+function Pagination({ page, totalPages, totalRows, onPageChange }) {
+  if (totalPages <= 1) return null;
+
+  // Show at most 5 page buttons around the current page
+  const pages = [];
+  const start = Math.max(1, page - 2);
+  const end = Math.min(totalPages, start + 4);
+  for (let i = start; i <= end; i++) pages.push(i);
+
+  return (
+    <div className="flex items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-200">
+      <div className="text-xs text-slate-500">
+        Showing <b>{totalRows === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}</b>–
+        <b>{Math.min(page * PAGE_SIZE, totalRows)}</b> of <b>{totalRows}</b>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPageChange(1)}
+          disabled={page === 1}
+          className="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          title="First page"
+        >
+          «
+        </button>
+        <button
+          onClick={() => onPageChange(page - 1)}
+          disabled={page === 1}
+          className="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Previous"
+        >
+          ‹ Prev
+        </button>
+
+        {start > 1 && (
+          <>
+            <button
+              onClick={() => onPageChange(1)}
+              className="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-100"
+            >
+              1
+            </button>
+            {start > 2 && <span className="px-1 text-slate-400">…</span>}
+          </>
+        )}
+
+        {pages.map((p) => (
+          <button
+            key={p}
+            onClick={() => onPageChange(p)}
+            className={`px-2 py-1 text-xs rounded border ${
+              p === page
+                ? "bg-emerald-600 text-white border-emerald-600 font-bold"
+                : "border-slate-300 hover:bg-slate-100"
+            }`}
+          >
+            {p}
+          </button>
+        ))}
+
+        {end < totalPages && (
+          <>
+            {end < totalPages - 1 && <span className="px-1 text-slate-400">…</span>}
+            <button
+              onClick={() => onPageChange(totalPages)}
+              className="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-100"
+            >
+              {totalPages}
+            </button>
+          </>
+        )}
+
+        <button
+          onClick={() => onPageChange(page + 1)}
+          disabled={page === totalPages}
+          className="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Next"
+        >
+          Next ›
+        </button>
+        <button
+          onClick={() => onPageChange(totalPages)}
+          disabled={page === totalPages}
+          className="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          title="Last page"
+        >
+          »
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function Sales() {
@@ -106,6 +198,9 @@ export default function Sales() {
   const [paymentMode, setPaymentMode] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // ── Pagination state ──
+  const [page, setPage] = useState(1);
 
   const load = async () => {
     setError("");
@@ -132,13 +227,31 @@ export default function Sales() {
     /* eslint-disable-next-line */
   }, [q, status, paymentMode, from, to]);
 
+  // Reset to page 1 whenever filters change
+  useEffect(() => {
+    setPage(1);
+  }, [q, status, paymentMode, from, to]);
+
   const clearFilters = () => {
     setQ(""); setStatus(""); setPaymentMode(""); setFrom(""); setTo("");
   };
 
   const hasFilter = q || status || paymentMode || from || to;
 
-  // ── View handler (fetch fresh from API to get full details) ──
+  // ── Derived: paginated slice ──
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedRows = useMemo(() => {
+    const startIdx = (safePage - 1) * PAGE_SIZE;
+    return rows.slice(startIdx, startIdx + PAGE_SIZE);
+  }, [rows, safePage]);
+
+  // If current page is out of range after delete, clamp back
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  // ── View handler ──
   const handleView = async (sale) => {
     try {
       const { data } = await api.get(`/sales/${sale.id}`);
@@ -238,7 +351,7 @@ export default function Sales() {
 
       <Card>
         <Table
-          rows={rows}
+          rows={pagedRows}
           keyField="id"
           columns={[
             { key: "invoice_no", label: "Invoice #" },
@@ -297,10 +410,18 @@ export default function Sales() {
             )},
           ]}
         />
-        {rows.length === 0 && (
+
+        {rows.length === 0 ? (
           <p className="text-center text-slate-400 py-8 text-sm">
             {hasFilter ? "No sales match the current filters." : "No sales yet."}
           </p>
+        ) : (
+          <Pagination
+            page={safePage}
+            totalPages={totalPages}
+            totalRows={rows.length}
+            onPageChange={setPage}
+          />
         )}
       </Card>
 
@@ -473,40 +594,27 @@ function ScooterIllustration() {
   return (
     <svg viewBox="0 0 150 80" className="h-full w-auto" xmlns="http://www.w3.org/2000/svg"
          aria-label="Delivery scooter">
-      {/* speed lines */}
       <g stroke="#ffffff" strokeWidth="2" strokeLinecap="round" opacity="0.85">
         <line x1="2" y1="30" x2="18" y2="30" />
         <line x1="0" y1="42" x2="14" y2="42" />
         <line x1="6" y1="54" x2="20" y2="54" />
       </g>
-
-      {/* delivery box */}
       <g transform="translate(22,18)">
         <rect x="0" y="0" width="34" height="26" rx="4" fill="#ef4444" stroke="#ffffff" strokeWidth="1.5" />
         <rect x="14" y="6" width="6" height="14" rx="1" fill="#ffffff" />
         <rect x="10" y="10" width="14" height="6" rx="1" fill="#ffffff" />
       </g>
-
-      {/* rear body */}
       <path d="M26 58 C26 46 38 42 54 44 L62 56 Z" fill="#fbbf24" />
-      {/* seat */}
       <rect x="52" y="40" width="26" height="6" rx="3" fill="#111827" />
-      {/* floorboard */}
       <rect x="58" y="54" width="42" height="6" rx="3" fill="#f59e0b" />
-      {/* front shield */}
       <path d="M96 56 L106 24 L113 27 L110 58 Z" fill="#fbbf24" />
-      {/* handlebar + headlight */}
       <line x1="106" y1="24" x2="100" y2="18" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" />
       <circle cx="114" cy="30" r="3.5" fill="#fef9c3" stroke="#ffffff" strokeWidth="1" />
-
-      {/* rider */}
       <circle cx="68" cy="16" r="8" fill="#ffffff" />
       <rect x="62" y="11" width="14" height="6" rx="3" fill="#1e293b" />
       <line x1="68" y1="24" x2="66" y2="40" stroke="#ffffff" strokeWidth="8" strokeLinecap="round" />
       <line x1="70" y1="28" x2="100" y2="20" stroke="#ffffff" strokeWidth="4" strokeLinecap="round" />
       <line x1="64" y1="44" x2="86" y2="54" stroke="#e2e8f0" strokeWidth="5" strokeLinecap="round" />
-
-      {/* wheels */}
       <circle cx="38" cy="64" r="11" fill="#1f2937" stroke="#ffffff" strokeWidth="2" />
       <circle cx="38" cy="64" r="4" fill="#9ca3af" />
       <circle cx="108" cy="64" r="11" fill="#1f2937" stroke="#ffffff" strokeWidth="2" />
@@ -538,17 +646,14 @@ function AdFooter() {
         @media print { .pos-scooter, .pos-road { animation: none !important; } }
       `}</style>
 
-      {/* decorative circles */}
       <div className="absolute -right-6 -top-8 h-24 w-24 rounded-full bg-white/10" />
       <div className="absolute right-24 -bottom-10 h-20 w-20 rounded-full bg-white/10" />
 
       <div className="relative flex items-center gap-3 px-4 pt-2 pb-3">
-        {/* Scooter */}
         <div className="pos-scooter h-[60px] shrink-0">
           <ScooterIllustration />
         </div>
 
-        {/* Headline */}
         <div className="min-w-0 flex-1 leading-tight">
           <div className="text-[9px] font-bold uppercase tracking-[0.25em] text-yellow-300">
             Primaria Pharmacy
@@ -560,33 +665,22 @@ function AdFooter() {
             Medicines at your doorstep · within Guntur city limits
           </div>
 
-          {/* Contact Numbers */}
           <div className="mt-2 flex flex-col gap-1.5 text-[10px] leading-snug">
-            {/* General Number */}
             <div className="flex items-center gap-1">
               <span className="font-semibold">General Number:</span>
-              <a
-                href="tel:+918121222571"
-                className="font-bold underline decoration-white/50"
-              >
+              <a href="tel:+918121222571" className="font-bold underline decoration-white/50">
                 +91 81212 22571
               </a>
             </div>
-
-            {/* Highlighted Order Number */}
             <div className="inline-flex items-center gap-1.5 w-fit rounded-md bg-yellow-300 px-2 py-1 text-slate-900 shadow-md">
               <span className="font-black uppercase">📞 Order Now:</span>
-              <a
-                href="tel:+919247966505"
-                className="font-black text-[12px] underline decoration-slate-900"
-              >
+              <a href="tel:+919247966505" className="font-black text-[12px] underline decoration-slate-900">
                 +91 92479 66505
               </a>
             </div>
           </div>
         </div>
 
-        {/* Offer badge */}
         <div
           className="shrink-0 rotate-[-3deg] rounded-lg bg-yellow-300 px-3 py-1.5 text-center text-slate-900 shadow-md"
           style={forcePrintColors}
@@ -597,7 +691,6 @@ function AdFooter() {
         </div>
       </div>
 
-      {/* Road */}
       <div className="h-[6px] bg-slate-900/80" style={forcePrintColors}>
         <div
           className="pos-road h-full w-full"
@@ -637,7 +730,6 @@ function InvoiceView({ sale }) {
   return (
     <div className="print-invoice bg-white text-slate-900 text-[11px] font-sans">
 
-      {/* Hide modal header / close button when printing */}
       <style type="text/css" media="print">
         {`
           @media print {
@@ -806,9 +898,8 @@ function InvoiceView({ sale }) {
           </div>
         )}
 
-        {/* ─────────── FOOTER ─────────── */}
+        {/* Footer */}
         <div className="border-t border-slate-800">
-          {/* Terms + signature */}
           <div className="grid grid-cols-12">
             <div className="col-span-7 p-3 border-r border-slate-800 text-[10px] text-slate-500 italic">
               Goods once sold will not be taken back. Please verify your prescription and items before billing.
@@ -822,7 +913,6 @@ function InvoiceView({ sale }) {
             </div>
           </div>
 
-          {/* 🛵 Advertisement banner */}
           <AdFooter />
         </div>
       </div>
@@ -836,7 +926,6 @@ function InvoiceView({ sale }) {
   );
 }
 
-/* ─── Tiny helper: label + value row ─── */
 function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-2">
