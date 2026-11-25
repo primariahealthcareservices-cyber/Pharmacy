@@ -83,7 +83,6 @@ function cleanReference(ref) {
 function overallPaymentSummary(sale) {
   const payments = Array.isArray(sale.payments) ? sale.payments : [];
   if (payments.length === 0) {
-    // Fallback to sale.payment_mode
     const m = sale.payment_mode || "cash";
     return isOnlineMode(m) ? "Online" : "Cash";
   }
@@ -145,7 +144,6 @@ export default function Sales() {
       const { data } = await api.get(`/sales/${sale.id}`);
       setDetail(data);
     } catch (e) {
-      // Fallback to the row we already have
       setDetail(sale);
     }
   };
@@ -264,7 +262,6 @@ export default function Sales() {
                 {r.payment_status}
               </Badge>
             )},
-            /* ✅ Payment Method column — uses overall summary */
             { key: "payment_mode", label: "Payment Method", render: (r) => {
               const summary = overallPaymentSummary(r);
               const isCashOnly = summary === "Cash";
@@ -471,66 +468,194 @@ function EditSaleForm({ sale, onCancel, onSaved }) {
   );
 }
 
-/* ─────────── Sales invoice template (original format + new footer) ─────────── */
-const BRAND = "#3b4fa0";
-const BRAND_LIGHT = "#eef1fb";
+/* ─────────── Scooter delivery illustration (inline SVG, print-safe) ─────────── */
+function ScooterIllustration() {
+  return (
+    <svg viewBox="0 0 150 80" className="h-full w-auto" xmlns="http://www.w3.org/2000/svg"
+         aria-label="Delivery scooter">
+      {/* speed lines */}
+      <g stroke="#ffffff" strokeWidth="2" strokeLinecap="round" opacity="0.85">
+        <line x1="2" y1="30" x2="18" y2="30" />
+        <line x1="0" y1="42" x2="14" y2="42" />
+        <line x1="6" y1="54" x2="20" y2="54" />
+      </g>
 
+      {/* delivery box */}
+      <g transform="translate(22,18)">
+        <rect x="0" y="0" width="34" height="26" rx="4" fill="#ef4444" stroke="#ffffff" strokeWidth="1.5" />
+        <rect x="14" y="6" width="6" height="14" rx="1" fill="#ffffff" />
+        <rect x="10" y="10" width="14" height="6" rx="1" fill="#ffffff" />
+      </g>
+
+      {/* rear body */}
+      <path d="M26 58 C26 46 38 42 54 44 L62 56 Z" fill="#fbbf24" />
+      {/* seat */}
+      <rect x="52" y="40" width="26" height="6" rx="3" fill="#111827" />
+      {/* floorboard */}
+      <rect x="58" y="54" width="42" height="6" rx="3" fill="#f59e0b" />
+      {/* front shield */}
+      <path d="M96 56 L106 24 L113 27 L110 58 Z" fill="#fbbf24" />
+      {/* handlebar + headlight */}
+      <line x1="106" y1="24" x2="100" y2="18" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="114" cy="30" r="3.5" fill="#fef9c3" stroke="#ffffff" strokeWidth="1" />
+
+      {/* rider */}
+      <circle cx="68" cy="16" r="8" fill="#ffffff" />
+      <rect x="62" y="11" width="14" height="6" rx="3" fill="#1e293b" />
+      <line x1="68" y1="24" x2="66" y2="40" stroke="#ffffff" strokeWidth="8" strokeLinecap="round" />
+      <line x1="70" y1="28" x2="100" y2="20" stroke="#ffffff" strokeWidth="4" strokeLinecap="round" />
+      <line x1="64" y1="44" x2="86" y2="54" stroke="#e2e8f0" strokeWidth="5" strokeLinecap="round" />
+
+      {/* wheels */}
+      <circle cx="38" cy="64" r="11" fill="#1f2937" stroke="#ffffff" strokeWidth="2" />
+      <circle cx="38" cy="64" r="4" fill="#9ca3af" />
+      <circle cx="108" cy="64" r="11" fill="#1f2937" stroke="#ffffff" strokeWidth="2" />
+      <circle cx="108" cy="64" r="4" fill="#9ca3af" />
+    </svg>
+  );
+}
+
+/* ─────────── Advertisement footer strip ─────────── */
+function AdFooter() {
+  const forcePrintColors = {
+    WebkitPrintColorAdjust: "exact",
+    printColorAdjust: "exact",
+  };
+
+  return (
+    <div
+      className="relative overflow-hidden text-white"
+      style={{
+        background: "linear-gradient(100deg, #26338f 0%, #3b4fb5 55%, #5a6ee0 100%)",
+        ...forcePrintColors,
+      }}
+    >
+      <style>{`
+        @keyframes pos-scooter-ride { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+        @keyframes pos-road-move { from { background-position: 0 0; } to { background-position: -40px 0; } }
+        .pos-scooter { animation: pos-scooter-ride 0.9s ease-in-out infinite; }
+        .pos-road { animation: pos-road-move 0.8s linear infinite; }
+        @media print { .pos-scooter, .pos-road { animation: none !important; } }
+      `}</style>
+
+      {/* decorative circles */}
+      <div className="absolute -right-6 -top-8 h-24 w-24 rounded-full bg-white/10" />
+      <div className="absolute right-24 -bottom-10 h-20 w-20 rounded-full bg-white/10" />
+
+      <div className="relative flex items-center gap-3 px-4 pt-2 pb-3">
+        {/* Scooter */}
+        <div className="pos-scooter h-[60px] shrink-0">
+          <ScooterIllustration />
+        </div>
+
+        {/* Headline */}
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="text-[9px] font-bold uppercase tracking-[0.25em] text-yellow-300">
+            Primaria Pharmacy
+          </div>
+          <div className="text-[20px] font-black italic tracking-tight leading-none mt-0.5">
+            2-HOUR <span className="text-yellow-300">EXPRESS DELIVERY</span>
+          </div>
+          <div className="text-[10px] mt-1 text-blue-100">
+            Medicines at your doorstep · within Guntur city limits
+          </div>
+
+          {/* Contact Numbers */}
+          <div className="mt-2 flex flex-col gap-1.5 text-[10px] leading-snug">
+            {/* General Number */}
+            <div className="flex items-center gap-1">
+              <span className="font-semibold">General Number:</span>
+              <a
+                href="tel:+918121222571"
+                className="font-bold underline decoration-white/50"
+              >
+                +91 81212 22571
+              </a>
+            </div>
+
+            {/* Highlighted Order Number */}
+            <div className="inline-flex items-center gap-1.5 w-fit rounded-md bg-yellow-300 px-2 py-1 text-slate-900 shadow-md">
+              <span className="font-black uppercase">📞 Order Now:</span>
+              <a
+                href="tel:+919247966505"
+                className="font-black text-[12px] underline decoration-slate-900"
+              >
+                +91 92479 66505
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* Offer badge */}
+        <div
+          className="shrink-0 rotate-[-3deg] rounded-lg bg-yellow-300 px-3 py-1.5 text-center text-slate-900 shadow-md"
+          style={forcePrintColors}
+        >
+          <div className="text-[9px] font-bold uppercase leading-none">Free Delivery</div>
+          <div className="text-[15px] font-black leading-tight">on orders ₹1,000+</div>
+          <div className="text-[8px] font-semibold leading-none">&amp; all subscription orders</div>
+        </div>
+      </div>
+
+      {/* Road */}
+      <div className="h-[6px] bg-slate-900/80" style={forcePrintColors}>
+        <div
+          className="pos-road h-full w-full"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(90deg, #fde047 0 20px, transparent 20px 40px)",
+            backgroundSize: "40px 2px",
+            backgroundRepeat: "repeat-x",
+            backgroundPosition: "0 center",
+            ...forcePrintColors,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ─────────── Invoice template (identical to POS.jsx) ─────────── */
 function InvoiceView({ sale }) {
   const totalInWords = numberToWords(sale.total);
-  const payments = Array.isArray(sale.payments) ? sale.payments : [];
-  const overallPayment = overallPaymentSummary(sale);
 
   useEffect(() => {
     const originalTitle = document.title;
-    const safeCustomerName = (sale.customer_name || "Walk-in_Customer")
-      .replace(/[^a-z0-9]/gi, "_");
+    const safeCustomerName = (sale.customer_name || "Walk-in_Customer").replace(/[^a-z0-9]/gi, "_");
     document.title = safeCustomerName;
     return () => { document.title = originalTitle; };
   }, [sale]);
 
+  const payments = Array.isArray(sale.payments) ? sale.payments : [];
+  const hasCash = payments.some((p) => (p.mode || "").toLowerCase() === "cash");
+  const hasOnline = payments.some((p) => (p.mode || "").toLowerCase() !== "cash");
+  const overallPaymentType =
+    hasCash && hasOnline ? "Cash + Online"
+    : hasOnline ? "Online Payment"
+    : "Cash";
+
   return (
     <div className="print-invoice bg-white text-slate-900 text-[11px] font-sans">
-      {/* A4 print layout — footer pinned to bottom, colours forced on */}
-      <style>{`
-        @media print {
-          @page { size: A4 portrait; margin: 0; }
-          html, body { background: #fff !important; }
-          .print-invoice {
-            width: 100% !important;
-            max-width: none !important;
-            box-sizing: border-box;
-            padding: 8mm 8mm 32mm 8mm !important;
-          }
-          /* page footer: blue band sits 1 inch above the bottom edge,
-             the delivery lines sit below it in that 1 inch space */
-          .invoice-footer {
-            position: fixed !important;
-            left: 0 !important;
-            right: 0 !important;
-            bottom: 0 !important;
-            height: 25.4mm;
-            display: flex;
-            flex-direction: column;
-            background: #fff;
-          }
-          .invoice-footer .invoice-band { padding: 3.5mm 10mm !important; }
-          .invoice-footer-lines {
-            flex: 1 1 auto;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            padding: 0 10mm;
-          }
-          .print-invoice, .print-invoice * {
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-        }
-      `}</style>
 
-      <div className="invoice-sheet border border-slate-800">
+      {/* Hide modal header / close button when printing */}
+      <style type="text/css" media="print">
+        {`
+          @media print {
+            .modal-header,
+            [class*="Modal"] > div:first-child,
+            [class*="modal"] > div:first-child {
+              display: none !important;
+            }
+            .print\\:hidden {
+              display: none !important;
+            }
+          }
+        `}
+      </style>
 
-        {/* ─── Header ─── */}
+      <div className="border border-slate-800">
+
+        {/* Header */}
         <div className="grid grid-cols-12 border-b border-slate-800">
           <div className="col-span-6 p-2 border-r border-slate-800">
             <div className="flex items-start gap-2">
@@ -542,12 +667,17 @@ function InvoiceView({ sale }) {
                   PRIMARIA PHARMACY
                 </div>
                 <div className="leading-tight">5/8 Brodipet, Guntur, AP</div>
-                <div className="leading-tight">Phone: +91 9247966505</div>
+                <div className="leading-tight">Phone: 9247966505</div>
                 <div className="leading-tight">Email: info@primariacare.com</div>
-                <div className="leading-tight">GSTIN: 37AAQCP012B1ZT</div>
+                <div className="leading-tight mt-1">
+                  <span className="font-bold text-[12px] text-red-700 bg-red-50 px-1 py-0.5 rounded border border-red-200">
+                    GSTIN: 37AAQCP0312B1ZT
+                  </span>
+                </div>
               </div>
             </div>
           </div>
+
           <div className="col-span-3 p-2 border-r border-slate-800 flex flex-col items-center justify-center text-center">
             <div className="font-bold text-[14px] tracking-wider">** TAX INVOICE **</div>
             <div className="mt-1 text-[10px]">
@@ -555,15 +685,16 @@ function InvoiceView({ sale }) {
                sale.payment_status === "partial" ? "PARTIAL" : "CREDIT"}
             </div>
           </div>
+
           <div className="col-span-3 p-2">
             <Row label="Bill No:" value={sale.invoice_no} />
             <Row label="Date:" value={new Date(sale.sale_date).toLocaleDateString("en-IN")} />
             <Row label="Time:" value={new Date(sale.sale_date).toLocaleTimeString("en-IN")} />
-            <Row label="Payment:" value={overallPayment} />
+            <Row label="Payment:" value={overallPaymentType} />
           </div>
         </div>
 
-        {/* ─── Customer ─── */}
+        {/* Customer */}
         <div className="grid grid-cols-12 border-b border-slate-800">
           <div className="col-span-6 p-2 border-r border-slate-800">
             <div className="font-bold">To,</div>
@@ -580,47 +711,45 @@ function InvoiceView({ sale }) {
           </div>
         </div>
 
-        {/* ─── Items (grows so totals + footer sit at the bottom) ─── */}
-        <div className="invoice-items">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-slate-100 border-b border-slate-800">
-                <th className="border-r border-slate-800 px-1 py-1 text-center w-8">S.N</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-left">PRODUCT NAME</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-center">HSN</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-center">BATCH</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-center">EXP</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-center">QTY</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-right">MRP</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-right">RATE</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-right">DIS%</th>
-                <th className="border-r border-slate-800 px-1 py-1 text-right">GST%</th>
-                <th className="px-1 py-1 text-right">AMOUNT</th>
+        {/* Items */}
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-800">
+              <th className="border-r border-slate-800 px-1 py-1 text-center w-8">S.N</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-left">PRODUCT NAME</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-center">HSN</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-center">BATCH</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-center">EXP</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-center">QTY</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-right">MRP</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-right">RATE</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-right">DIS%</th>
+              <th className="border-r border-slate-800 px-1 py-1 text-right">GST%</th>
+              <th className="px-1 py-1 text-right">AMOUNT</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sale.items.map((it, i) => (
+              <tr key={it.id} className="border-b border-slate-300">
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{i + 1}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5">{it.medicine_name}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.hsn_code || "-"}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.batch_no}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">
+                  {it.exp_date ? it.exp_date.slice(2, 7) : "-"}
+                </td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.quantity}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{money(it.mrp)}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{money(it.selling_price)}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{it.discount_percent || 0}</td>
+                <td className="border-r border-slate-300 px-1 py-0.5 text-right">{it.gst_rate || 12}</td>
+                <td className="px-1 py-0.5 text-right font-semibold">{money(it.line_total)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {sale.items.map((it, i) => (
-                <tr key={it.id} className="border-b border-slate-300">
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-center">{i + 1}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5">{it.medicine_name}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.hsn_code || "-"}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.batch_no}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-center">
-                    {it.exp_date ? it.exp_date.slice(2, 7) : "-"}
-                  </td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-center">{it.quantity}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-right">{money(it.mrp)}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-right">{money(it.selling_price)}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-right">{it.discount_percent || 0}</td>
-                  <td className="border-r border-slate-300 px-1 py-0.5 text-right">{it.gst_rate || 12}</td>
-                  <td className="px-1 py-0.5 text-right font-semibold">{money(it.line_total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
 
-        {/* ─── Totals ─── */}
+        {/* Totals */}
         <div className="grid grid-cols-12 border-t border-slate-800">
           <div className="col-span-7 p-2 border-r border-slate-800">
             <div className="text-[10px] uppercase font-bold text-slate-600">Amount in words</div>
@@ -644,103 +773,70 @@ function InvoiceView({ sale }) {
           </div>
         </div>
 
-        {/* ─── Payment Details ─── */}
+        {/* Payment Details */}
         {payments.length > 0 && (
           <div className="border-t border-slate-800 p-2">
-            <div className="flex justify-between items-center mb-1">
-              <div className="text-[10px] uppercase font-bold text-slate-600">
-                Payment Details
-              </div>
-              {payments.length > 1 && (
-                <div className="text-[9px] uppercase font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded">
-                  Split Payment ({payments.length} methods)
-                </div>
-              )}
+            <div className="text-[10px] uppercase font-bold text-slate-600 mb-1">
+              Payment Details
             </div>
             <table className="w-full text-[10px] border-collapse">
               <thead>
                 <tr className="bg-slate-50">
                   <th className="border border-slate-300 px-1 py-0.5 text-left">Method</th>
-                  <th className="border border-slate-300 px-1 py-0.5 text-left">Type</th>
                   <th className="border border-slate-300 px-1 py-0.5 text-right">Amount</th>
                   <th className="border border-slate-300 px-1 py-0.5 text-left">UTR / Reference</th>
                 </tr>
               </thead>
               <tbody>
-                {payments.map((p) => {
-                  const isCash = (p.mode || "cash").toLowerCase() === "cash";
-                  return (
-                    <tr key={p.id}>
-                      <td className="border border-slate-300 px-1 py-0.5 font-semibold">
-                        {paymentModeLabel(p.mode)}
-                      </td>
-                      <td className="border border-slate-300 px-1 py-0.5">
-                        {isCash ? "Cash" : "Online"}
-                      </td>
-                      <td className="border border-slate-300 px-1 py-0.5 text-right">
-                        {money(p.amount)}
-                      </td>
-                      <td className="border border-slate-300 px-1 py-0.5 break-all">
-                        {cleanReference(p.reference) || "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-                {payments.length > 1 && (
-                  <tr className="bg-slate-100 font-bold">
-                    <td className="border border-slate-300 px-1 py-0.5" colSpan={2}>
-                      Total Paid
+                {payments.map((p) => (
+                  <tr key={p.id}>
+                    <td className="border border-slate-300 px-1 py-0.5">
+                      {paymentModeLabel(p.mode)}
                     </td>
                     <td className="border border-slate-300 px-1 py-0.5 text-right">
-                      {money(payments.reduce((s, p) => s + (Number(p.amount) || 0), 0))}
+                      {money(p.amount)}
                     </td>
-                    <td className="border border-slate-300 px-1 py-0.5"></td>
+                    <td className="border border-slate-300 px-1 py-0.5 break-all">
+                      {cleanReference(p.reference) || "—"}
+                    </td>
                   </tr>
-                )}
+                ))}
               </tbody>
             </table>
           </div>
         )}
 
-        {/* ─── Terms + signatory ─── */}
-        <div className="border-t border-slate-800 px-3 py-2 flex justify-between text-[10px]">
-          <div>
-            <div>Goods once sold will not be taken back.</div>
-            <div className="font-semibold" style={{ color: BRAND }}>
-              Thank you for choosing Primaria Pharmacy! Get well soon.
+        {/* ─────────── FOOTER ─────────── */}
+        <div className="border-t border-slate-800">
+          {/* Terms + signature */}
+          <div className="grid grid-cols-12">
+            <div className="col-span-7 p-3 border-r border-slate-800 text-[10px] text-slate-500 italic">
+              Goods once sold will not be taken back. Please verify your prescription and items before billing.
+              <div className="mt-2 not-italic text-[11px] text-slate-700">
+                Thank you for choosing us for your family's health!
+              </div>
+            </div>
+            <div className="col-span-5 p-3 text-right text-[11px]">
+              <div className="font-bold text-slate-900">For PRIMARIA PHARMACY</div>
+              <div className="mt-6 text-slate-600">Authorised Signatory</div>
             </div>
           </div>
-          <div className="text-right">
-            <div className="font-bold">For PRIMARIA PHARMACY</div>
-            <div className="mt-5 border-t border-slate-400 pt-0.5">Authorised Signatory</div>
-          </div>
-        </div>
 
-      </div>
-
-      {/* ─── Page footer: blue band + delivery lines below it ─── */}
-      <div className="invoice-footer">
-        <div
-          className="invoice-band flex items-center justify-between gap-2 px-4 py-2 text-[11px] text-white"
-          style={{ backgroundColor: BRAND }}
-        >
-          <span>📞 +91 9247966505</span>
-          <span>✉ info@primariacare.com</span>
-          <span>🌐 www.primariahealthcare.com</span>
+          {/* 🛵 Advertisement banner */}
+          <AdFooter />
         </div>
-        <div className="invoice-footer-lines flex items-center justify-between gap-4 py-1.5 text-[10px] font-semibold leading-snug">
-  <span>➜ 2-Hour Express Delivery within Guntur city limits.</span>
-  <span>➜ Free Delivery for recurring patients and on orders above ₹1,000.</span>
-</div>
       </div>
 
       <div className="flex justify-end gap-3 mt-4 print:hidden">
-        <Button variant="secondary" onClick={() => handlePrint(sale)}>🖨 Print</Button>
+        <Button variant="secondary" onClick={() => window.print()}>
+          🖨 Print
+        </Button>
       </div>
     </div>
   );
 }
 
+/* ─── Tiny helper: label + value row ─── */
 function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-2">
@@ -748,22 +844,4 @@ function Row({ label, value }) {
       <span className="font-medium text-right">{value}</span>
     </div>
   );
-}
-
-/* Print helper — sets document.title to customer name so "Save as PDF"
-   suggests "<Customer>.pdf" */
-function handlePrint(sale) {
-  const patient = (sale.customer_name || "Walk-in").trim();
-  const safe = (patient || "Invoice").replace(/[\\/:*?"<>|]+/g, "-");
-
-  const prevTitle = document.title;
-  document.title = safe;
-  window.print();
-
-  const restore = () => {
-    document.title = prevTitle;
-    window.removeEventListener("afterprint", restore);
-  };
-  window.addEventListener("afterprint", restore);
-  setTimeout(restore, 1000);
 }
