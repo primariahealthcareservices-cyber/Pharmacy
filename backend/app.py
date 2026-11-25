@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
+from flask_migrate import Migrate
 from config import Config
 from extensions import db, jwt
 
@@ -13,6 +14,7 @@ def create_app():
 
     db.init_app(app)
     jwt.init_app(app)
+    Migrate(app, db)          # ✅ NEW — enables `flask db ...`
 
     from routes.auth import auth_bp
     from routes.masters import masters_bp
@@ -24,7 +26,7 @@ def create_app():
     from routes.payments import payments_bp
     from routes.dashboard import dashboard_bp
     from routes.reports import reports_bp
-    from routes.reference_medicines import reference_medicines_bp   # ← NEW
+    from routes.reference_medicines import reference_medicines_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(masters_bp, url_prefix="/api")
@@ -36,7 +38,7 @@ def create_app():
     app.register_blueprint(payments_bp, url_prefix="/api/payments")
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
     app.register_blueprint(reports_bp, url_prefix="/api/reports")
-    app.register_blueprint(reference_medicines_bp, url_prefix="/api/reference-medicines")  # ← NEW
+    app.register_blueprint(reference_medicines_bp, url_prefix="/api/reference-medicines")
 
     @app.get("/api/health")
     def health():
@@ -105,7 +107,6 @@ def create_app():
 
     @app.errorhandler(422)
     def handle_422(e):
-        # JWT errors that slip through → convert to 401
         return jsonify({"message": "Unprocessable request", "detail": str(e)}), 422
 
     return app

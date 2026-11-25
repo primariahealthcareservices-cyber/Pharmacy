@@ -424,6 +424,7 @@ class PurchaseItem(db.Model):
     discount_percent = db.Column(db.Float, default=0)
     line_total = db.Column(db.Float, default=0)
     returned_qty = db.Column(db.Integer, default=0)
+    hsn_code = db.Column(db.String(20))
 
     medicine = db.relationship("Medicine", lazy=True)
 
@@ -438,6 +439,7 @@ class PurchaseItem(db.Model):
             "selling_price": self.selling_price, "gst_rate": self.gst_rate,
             "discount_percent": self.discount_percent,
             "line_total": self.line_total, "returned_qty": self.returned_qty,
+            "hsn_code": self.hsn_code or (self.medicine.hsn_code if self.medicine else "") or "",
         }
 
 
@@ -548,6 +550,7 @@ class SaleItem(db.Model):
     line_total = db.Column(db.Float, default=0)
     profit = db.Column(db.Float, default=0)
     returned_qty = db.Column(db.Integer, default=0)
+    hsn_code = db.Column(db.String(20))
 
     medicine = db.relationship("Medicine", lazy=True)
 
@@ -564,6 +567,7 @@ class SaleItem(db.Model):
             "gst_rate": self.gst_rate, "tax_amount": self.tax_amount,
             "line_total": self.line_total, "profit": self.profit,
             "returned_qty": self.returned_qty,
+            "hsn_code": self.hsn_code or (self.medicine.hsn_code if self.medicine else "") or "",
         }
 
 
@@ -778,4 +782,4 @@ class AuditLog(db.Model):
             "new_value": self.new_value,
             "ip": self.ip,
             "created_at": iso(self.created_at),
-        }     
+        }

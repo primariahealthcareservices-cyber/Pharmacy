@@ -140,6 +140,9 @@ def create_purchase():
         gst = _to_num(it.get("gst_rate"), med.gst_rate or 12)
         disc_pct = _to_num(it.get("discount_percent"), 0)
 
+        # ✅ Fetch HSN from item override or fall back to medicine master
+        hsn_code = (it.get("hsn_code") or med.hsn_code or "").strip()
+
         # Line total is based on SELLING price (per base unit)
         line_total = round(qty_base * sell_base * (1 - disc_pct / 100.0), 2)
         taxable = line_total / (1 + gst / 100.0) if gst else line_total
@@ -179,12 +182,14 @@ def create_purchase():
         batch.initial_qty = (batch.initial_qty or 0) + total_units
         batch.free_qty = (batch.free_qty or 0) + free_base
 
+        # ✅ Pass hsn_code to PurchaseItem
         db.session.add(PurchaseItem(
             purchase_id=p.id, medicine_id=med.id, batch_id=batch.id,
             batch_no=batch.batch_no, mfg_date=batch.mfg_date, exp_date=batch.exp_date,
             quantity=qty_base, free_qty=free_base,
             cost_price=effective_cost, mrp=mrp_base, selling_price=sell_base,
             gst_rate=gst, discount_percent=disc_pct, line_total=line_total,
+            hsn_code=hsn_code,
         ))
 
         med.cost_price = effective_cost

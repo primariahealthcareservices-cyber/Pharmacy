@@ -53,7 +53,6 @@ function paymentModeLabel(mode) {
 /* ─────────── Clean reference (strip "Last4:xxxx") ─────────── */
 function cleanReference(ref) {
   if (!ref) return "";
-  // Remove "Last4:1234" and trailing separators
   return ref
     .split("|")
     .map((s) => s.trim())
@@ -76,7 +75,6 @@ export default function POS() {
   const [useOnline, setUseOnline] = useState(false);
   const [cash, setCash] = useState("");
 
-  /* ✅ Online method default to phonepe */
   const [onlineMethod, setOnlineMethod] = useState("phonepe");
   const [online, setOnline] = useState("");
   const [onlineRef, setOnlineRef] = useState("");
@@ -161,7 +159,6 @@ export default function POS() {
   const paid = cashAmt + onlineAmt;
   const change = paid - total;
 
-  /* ✅ Only keep UTR (no Last4) */
   const buildOnlineReference = () => {
     if (onlineRef.trim()) return `UTR:${onlineRef.trim()}`;
     return null;
@@ -441,7 +438,6 @@ export default function POS() {
             {useOnline && (
               <div className="ml-2 pl-3 border-l-2 border-blue-400 bg-blue-50/50 rounded p-2 space-y-2">
                 <Field label="Online Method *">
-                  {/* ✅ NEW: Specific apps */}
                   <Select value={onlineMethod}
                           onChange={(e) => setOnlineMethod(e.target.value)}>
                     <option value="phonepe">PhonePe</option>
@@ -557,7 +553,6 @@ export default function POS() {
                   {successInvoice.payments.map((p, i) => (
                     <div key={i} className="text-xs border-b border-slate-100 py-1 last:border-0">
                       <div className="flex justify-between">
-                        {/* ✅ Show app name like PhonePe */}
                         <span className="font-semibold text-slate-700">
                           {paymentModeLabel(p.mode)}
                         </span>
@@ -593,9 +588,159 @@ export default function POS() {
       </Modal>
 
       {/* INVOICE MODAL */}
-      <Modal open={!!invoice} onClose={() => setInvoice(null)} title="Invoice" wide>
+      <Modal open={!!invoice} onClose={() => setInvoice(null)} title="" wide>
         {invoice && <InvoiceView sale={invoice} />}
       </Modal>
+    </div>
+  );
+}
+
+/* ─────────── Scooter delivery illustration (inline SVG, print-safe) ─────────── */
+function ScooterIllustration() {
+  return (
+    <svg viewBox="0 0 150 80" className="h-full w-auto" xmlns="http://www.w3.org/2000/svg"
+         aria-label="Delivery scooter">
+      {/* speed lines */}
+      <g stroke="#ffffff" strokeWidth="2" strokeLinecap="round" opacity="0.85">
+        <line x1="2" y1="30" x2="18" y2="30" />
+        <line x1="0" y1="42" x2="14" y2="42" />
+        <line x1="6" y1="54" x2="20" y2="54" />
+      </g>
+
+      {/* delivery box */}
+      <g transform="translate(22,18)">
+        <rect x="0" y="0" width="34" height="26" rx="4" fill="#ef4444" stroke="#ffffff" strokeWidth="1.5" />
+        <rect x="14" y="6" width="6" height="14" rx="1" fill="#ffffff" />
+        <rect x="10" y="10" width="14" height="6" rx="1" fill="#ffffff" />
+      </g>
+
+      {/* rear body */}
+      <path d="M26 58 C26 46 38 42 54 44 L62 56 Z" fill="#fbbf24" />
+      {/* seat */}
+      <rect x="52" y="40" width="26" height="6" rx="3" fill="#111827" />
+      {/* floorboard */}
+      <rect x="58" y="54" width="42" height="6" rx="3" fill="#f59e0b" />
+      {/* front shield */}
+      <path d="M96 56 L106 24 L113 27 L110 58 Z" fill="#fbbf24" />
+      {/* handlebar + headlight */}
+      <line x1="106" y1="24" x2="100" y2="18" stroke="#ffffff" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="114" cy="30" r="3.5" fill="#fef9c3" stroke="#ffffff" strokeWidth="1" />
+
+      {/* rider */}
+      <circle cx="68" cy="16" r="8" fill="#ffffff" />
+      <rect x="62" y="11" width="14" height="6" rx="3" fill="#1e293b" />
+      <line x1="68" y1="24" x2="66" y2="40" stroke="#ffffff" strokeWidth="8" strokeLinecap="round" />
+      <line x1="70" y1="28" x2="100" y2="20" stroke="#ffffff" strokeWidth="4" strokeLinecap="round" />
+      <line x1="64" y1="44" x2="86" y2="54" stroke="#e2e8f0" strokeWidth="5" strokeLinecap="round" />
+
+      {/* wheels */}
+      <circle cx="38" cy="64" r="11" fill="#1f2937" stroke="#ffffff" strokeWidth="2" />
+      <circle cx="38" cy="64" r="4" fill="#9ca3af" />
+      <circle cx="108" cy="64" r="11" fill="#1f2937" stroke="#ffffff" strokeWidth="2" />
+      <circle cx="108" cy="64" r="4" fill="#9ca3af" />
+    </svg>
+  );
+}
+
+/* ─────────── Advertisement footer strip ─────────── */
+function AdFooter() {
+  const forcePrintColors = {
+    WebkitPrintColorAdjust: "exact",
+    printColorAdjust: "exact",
+  };
+
+  return (
+    <div
+      className="relative overflow-hidden text-white"
+      style={{
+        background: "linear-gradient(100deg, #26338f 0%, #3b4fb5 55%, #5a6ee0 100%)",
+        ...forcePrintColors,
+      }}
+    >
+      <style>{`
+        @keyframes pos-scooter-ride { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+        @keyframes pos-road-move { from { background-position: 0 0; } to { background-position: -40px 0; } }
+        .pos-scooter { animation: pos-scooter-ride 0.9s ease-in-out infinite; }
+        .pos-road { animation: pos-road-move 0.8s linear infinite; }
+        @media print { .pos-scooter, .pos-road { animation: none !important; } }
+      `}</style>
+
+      {/* decorative circles */}
+      <div className="absolute -right-6 -top-8 h-24 w-24 rounded-full bg-white/10" />
+      <div className="absolute right-24 -bottom-10 h-20 w-20 rounded-full bg-white/10" />
+
+      <div className="relative flex items-center gap-3 px-4 pt-2 pb-3">
+        {/* Scooter */}
+        <div className="pos-scooter h-[60px] shrink-0">
+          <ScooterIllustration />
+        </div>
+
+        {/* Headline */}
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="text-[9px] font-bold uppercase tracking-[0.25em] text-yellow-300">
+            Primaria Pharmacy
+          </div>
+          <div className="text-[20px] font-black italic tracking-tight leading-none mt-0.5">
+            2-HOUR <span className="text-yellow-300">EXPRESS DELIVERY</span>
+          </div>
+          <div className="text-[10px] mt-1 text-blue-100">
+            Medicines at your doorstep · within Guntur city limits
+          </div>
+
+{/* Contact Numbers */}
+<div className="mt-2 flex flex-col gap-1.5 text-[10px] leading-snug">
+ 
+
+  {/* General Number */}
+  <div className="flex items-center gap-1">
+    <span className="font-semibold">General Number:</span>
+    <a
+      href="tel:+918121222571"
+      className="font-bold underline decoration-white/50"
+    >
+      +91 81212 22571
+    </a>
+  </div>
+
+  {/* Highlighted Order Number */}
+  <div className="inline-flex items-center gap-1.5 w-fit rounded-md bg-yellow-300 px-2 py-1 text-slate-900 shadow-md">
+    <span className="font-black uppercase">📞 Order Now:</span>
+    <a
+      href="tel:+919247966505"
+      className="font-black text-[12px] underline decoration-slate-900"
+    >
+      +91 92479 66505
+    </a>
+  </div>
+</div>
+
+        </div>
+
+        {/* Offer badge */}
+        <div
+          className="shrink-0 rotate-[-3deg] rounded-lg bg-yellow-300 px-3 py-1.5 text-center text-slate-900 shadow-md"
+          style={forcePrintColors}
+        >
+          <div className="text-[9px] font-bold uppercase leading-none">Free Delivery</div>
+          <div className="text-[15px] font-black leading-tight">on orders ₹1,000+</div>
+          <div className="text-[8px] font-semibold leading-none">&amp; all subscription orders</div>
+        </div>
+      </div>
+
+      {/* Road */}
+      <div className="h-[6px] bg-slate-900/80" style={forcePrintColors}>
+        <div
+          className="pos-road h-full w-full"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(90deg, #fde047 0 20px, transparent 20px 40px)",
+            backgroundSize: "40px 2px",
+            backgroundRepeat: "repeat-x",
+            backgroundPosition: "0 center",
+            ...forcePrintColors,
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -606,7 +751,7 @@ function InvoiceView({ sale }) {
 
   useEffect(() => {
     const originalTitle = document.title;
-    const safeCustomerName = (sale.customer_name || "Walk-in_Customer").replace(/[^a-z0-9]/gi, '_');
+    const safeCustomerName = (sale.customer_name || "Walk-in_Customer").replace(/[^a-z0-9]/gi, "_");
     document.title = safeCustomerName;
     return () => { document.title = originalTitle; };
   }, [sale]);
@@ -621,6 +766,23 @@ function InvoiceView({ sale }) {
 
   return (
     <div className="print-invoice bg-white text-slate-900 text-[11px] font-sans">
+
+      {/* Hide modal header / close button when printing */}
+      <style type="text/css" media="print">
+        {`
+          @media print {
+            .modal-header,
+            [class*="Modal"] > div:first-child,
+            [class*="modal"] > div:first-child {
+              display: none !important;
+            }
+            .print\\:hidden {
+              display: none !important;
+            }
+          }
+        `}
+      </style>
+
       <div className="border border-slate-800">
 
         {/* Header */}
@@ -637,7 +799,11 @@ function InvoiceView({ sale }) {
                 <div className="leading-tight">5/8 Brodipet, Guntur, AP</div>
                 <div className="leading-tight">Phone: 9247966505</div>
                 <div className="leading-tight">Email: info@primariacare.com</div>
-                <div className="leading-tight">GSTIN: 37AAQCP012B1ZT</div>
+                <div className="leading-tight mt-1">
+                  <span className="font-bold text-[12px] text-red-700 bg-red-50 px-1 py-0.5 rounded border border-red-200">
+                    GSTIN: 37AAQCP0312B1ZT
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -737,7 +903,7 @@ function InvoiceView({ sale }) {
           </div>
         </div>
 
-        {/* ✅ Payment Details — app name, no Last4 */}
+        {/* Payment Details */}
         {payments.length > 0 && (
           <div className="border-t border-slate-800 p-2">
             <div className="text-[10px] uppercase font-bold text-slate-600 mb-1">
@@ -754,7 +920,6 @@ function InvoiceView({ sale }) {
               <tbody>
                 {payments.map((p) => (
                   <tr key={p.id}>
-                    {/* ✅ Human-friendly label (PhonePe, Google Pay, Cash, …) */}
                     <td className="border border-slate-300 px-1 py-0.5">
                       {paymentModeLabel(p.mode)}
                     </td>
@@ -762,7 +927,6 @@ function InvoiceView({ sale }) {
                       {money(p.amount)}
                     </td>
                     <td className="border border-slate-300 px-1 py-0.5 break-all">
-                      {/* ✅ Hide Last4 from reference */}
                       {cleanReference(p.reference) || "—"}
                     </td>
                   </tr>
@@ -772,16 +936,24 @@ function InvoiceView({ sale }) {
           </div>
         )}
 
-        {/* Footer */}
-        <div className="border-t border-slate-800 p-2 flex justify-between text-[10px]">
-          <div>
-            <div>Goods once sold will not be taken back.</div>
-            <div>Thank you for your visit!</div>
+        {/* ─────────── FOOTER ─────────── */}
+        <div className="border-t border-slate-800">
+          {/* Terms + signature */}
+          <div className="grid grid-cols-12">
+            <div className="col-span-7 p-3 border-r border-slate-800 text-[10px] text-slate-500 italic">
+              Goods once sold will not be taken back. Please verify your prescription and items before billing.
+              <div className="mt-2 not-italic text-[11px] text-slate-700">
+                Thank you for choosing us for your family's health!
+              </div>
+            </div>
+            <div className="col-span-5 p-3 text-right text-[11px]">
+              <div className="font-bold text-slate-900">For PRIMARIA PHARMACY</div>
+              <div className="mt-6 text-slate-600">Authorised Signatory</div>
+            </div>
           </div>
-          <div className="text-right">
-            <div className="font-bold">For PRIMARIA PHARMACY</div>
-            <div className="mt-4">Authorised Signatory</div>
-          </div>
+
+          {/* 🛵 Advertisement banner */}
+          <AdFooter />
         </div>
       </div>
 

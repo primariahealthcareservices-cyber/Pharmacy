@@ -87,3 +87,42 @@ body { @apply bg-slate-100 text-slate-800; }
 .login-bg {
   background: linear-gradient(135deg, #e3e8ec 0%, #f6fafd 50%, #dce2e6 100%);
 }
+
+/* ─────────────────────────────────────────────
+   Print styles (Fix for full page & hiding sidebar)
+   ───────────────────────────────────────────── */
+@media print {
+  /* 1. Hide EVERYTHING on the page by default */
+  body * {
+    visibility: hidden;
+  }
+
+  /* 2. Show ONLY the invoice and its children */
+  .print-invoice, .print-invoice * {
+    visibility: visible;
+  }
+
+  /* 3. Position the invoice at the top-left of the printed page */
+  .print-invoice {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* 4. Set page margins */
+  @page {
+    margin: 10mm;
+    size: auto;
+  }
+  
+  /* 5. Ensure background colors and borders print properly */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}

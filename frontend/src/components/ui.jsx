@@ -32,7 +32,7 @@ export function Stat({ label, value, sub, tone = "slate" }) {
   );
 }
 
-export function Modal({ open, onClose, title, children, wide }) {
+export function Modal({ open, onClose, title, children, wide, hideHeader = false }) {
   useEffect(() => {
     const h = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", h);
@@ -41,13 +41,15 @@ export function Modal({ open, onClose, title, children, wide }) {
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto">
-      <div className={`bg-white rounded-xl shadow-xl w-full ${wide ? "max-w-4xl" : "max-w-lg"} my-8`}>
-        <div className="flex items-center justify-between px-5 py-3 border-b">
-          <h3 className="font-semibold">{title}</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
-        </div>
-        <div className="p-5">{children}</div>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto print:static print:block print:bg-transparent print:p-0 print:overflow-visible">
+      <div className={`bg-white rounded-xl shadow-xl w-full ${wide ? "max-w-4xl" : "max-w-lg"} my-8 print:my-0 print:shadow-none print:max-w-none`}>
+        {!hideHeader && (
+          <div className="flex items-center justify-between px-5 py-3 border-b print:hidden">
+            <h3 className="font-semibold">{title}</h3>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+          </div>
+        )}
+        <div className="p-5 print:p-0">{children}</div>
       </div>
     </div>
   );
