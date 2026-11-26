@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import api from "../api/client";
 import { Card, Modal, Button, Input, Select, Field, Table } from "./ui";
 
-export default function CrudPage({ title, endpoint, columns, fields, searchPlaceholder }) {
+/**
+ * New optional props:
+ *   params   – extra query params sent on every list call, e.g. { type: "online" }
+ *   headerExtra – node rendered next to the "+ New" button / above the table (e.g. tabs)
+ */
+export default function CrudPage({
+  title, endpoint, columns, fields, searchPlaceholder,
+  params = {}, headerExtra = null, singular,
+}) {
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -11,15 +19,17 @@ export default function CrudPage({ title, endpoint, columns, fields, searchPlace
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const paramsKey = JSON.stringify(params);
+
   const load = async () => {
     setLoading(true);
     try {
-      const { data } = await api.get(endpoint, { params: { q } });
+      const { data } = await api.get(endpoint, { params: { ...params, q } });
       setRows(data);
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, paramsKey]);
 
   const openCreate = () => {
     setEditing(null);
@@ -30,7 +40,7 @@ export default function CrudPage({ title, endpoint, columns, fields, searchPlace
 
   const openEdit = (row) => {
     setEditing(row);
-    setForm(Object.fromEntries(fields.map((f) => [f.name, row[f.name] ?? ""])));
+    setForm(Object.fromEntries(fields.map((f) => [f.name, row[f.name] ?? f.default ?? ""])));
     setError("");
     setOpen(true);
   };
@@ -72,12 +82,18 @@ export default function CrudPage({ title, endpoint, columns, fields, searchPlace
     },
   ];
 
+  // fields can hide themselves depending on the current form values
+  const visibleFields = fields.filter((f) => !f.showIf || f.showIf(form));
+  const noun = singular || title.slice(0, -1);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-bold">{title}</h1>
         <Button onClick={openCreate}>+ New</Button>
       </div>
+
+      {headerExtra}
 
       <Card>
         <div className="mb-3">
@@ -87,14 +103,14 @@ export default function CrudPage({ title, endpoint, columns, fields, searchPlace
         <Table columns={allColumns} rows={rows} empty={loading ? "Loading..." : "No records found"} />
       </Card>
 
-      <Modal open={open} onClose={() => setOpen(false)} title={`${editing ? "Edit" : "New"} ${title.slice(0, -1)}`} wide>
+      <Modal open={open} onClose={() => setOpen(false)} title={`${editing ? "Edit" : "New"} ${noun}`} wide>
         <form onSubmit={save} className="grid grid-cols-2 gap-4">
-          {fields.map((f) => (
+          {visibleFields.map((f) => (
             <div key={f.name} className={f.full ? "col-span-2" : ""}>
               <Field label={f.label}>
                 {f.type === "select" ? (
                   <Select value={form[f.name] ?? ""} onChange={(e) => setForm({ ...form, [f.name]: e.target.value })}>
-                    <option value="">— Select —</option>
+                    {!f.noEmpty && <option value="">— Select —</option>}
                     {f.options.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
@@ -106,7 +122,7 @@ export default function CrudPage({ title, endpoint, columns, fields, searchPlace
                 ) : (
                   <Input type={f.type || "text"} value={form[f.name] ?? ""}
                          onChange={(e) => setForm({ ...form, [f.name]: e.target.value })}
-                         required={f.required} />
+                         required={typeof f.required === "function" ? f.required(form) : f.required} />
                 )}
               </Field>
             </div>

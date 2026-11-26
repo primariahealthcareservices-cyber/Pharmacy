@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api, { money } from "../api/client";
 import { Card, Button, Input, Select, Field, Modal } from "../components/ui";
 
@@ -60,13 +60,110 @@ function cleanReference(ref) {
     .join(" | ");
 }
 
+/* ─────────── Customer type helper ─────────── */
+// "retail" / empty (old rows) count as walk-in
+const normType = (t) =>
+  String(t || "").toLowerCase().replace(/[\s-]/g, "_") === "online" ? "online" : "walk_in";
+
+/* ─────────── Searchable customer dropdown (only the chosen type) ─────────── */
+function CustomerPicker({ type, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [all, setAll] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const boxRef = useRef(null);
+
+  // reload the customer list every time the dropdown opens (so new customers show up)
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    api.get("/customers", { params: { type } })
+      .then((r) => setAll(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setAll([]))
+      .finally(() => setLoading(false));
+  }, [open, type]);
+
+  // close when clicking outside
+  useEffect(() => {
+    const h = (e) => {
+      if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+
+  // type filter + case-insensitive search on name / phone
+  const list = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return all.filter((c) =>
+      normType(c.customer_type) === type &&
+      (!ql ||
+        (c.name || "").toLowerCase().includes(ql) ||
+        (c.phone || "").toLowerCase().includes(ql))
+    );
+  }, [all, type, q]);
+
+  const pick = (c) => { onChange(c); setOpen(false); setQ(""); };
+
+  return (
+    <div className="relative" ref={boxRef}>
+      <button type="button" onClick={() => setOpen((o) => !o)}
+              className="input w-full flex items-center justify-between text-left">
+        <span className={`truncate ${value ? "text-slate-800" : "text-slate-400"}`}>
+          {value
+            ? `${value.name}${value.phone ? " · " + value.phone : ""}`
+            : type === "online" ? "Select online customer" : "Walk-in Customer (no details)"}
+        </span>
+        <span className="text-slate-400 text-xs ml-2">▾</span>
+      </button>
+
+      {open && (
+        <div className="absolute z-30 mt-1 w-full bg-white border rounded-lg shadow-lg">
+          <div className="p-2 border-b">
+            <input autoFocus className="input w-full" placeholder="Search name or phone..."
+                   value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+
+          <div className="max-h-60 overflow-y-auto divide-y">
+            {type === "walk_in" && (
+              <button type="button" onClick={() => pick(null)}
+                      className="w-full text-left px-3 py-2 text-sm text-slate-500 hover:bg-emerald-50">
+                Walk-in Customer (no details)
+              </button>
+            )}
+
+            {loading && <p className="px-3 py-3 text-sm text-slate-400">Loading…</p>}
+
+            {!loading && list.length === 0 && (
+              <p className="px-3 py-3 text-sm text-slate-400">
+                No {type === "online" ? "online" : "walk-in"} customers found
+              </p>
+            )}
+
+            {list.map((c) => (
+              <button key={c.id} type="button" onClick={() => pick(c)}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-emerald-50 ${
+                        value?.id === c.id ? "bg-emerald-50" : ""}`}>
+                <div className="font-semibold text-slate-800">{c.name}</div>
+                <div className="text-xs text-slate-500">
+                  {c.phone || "No phone"}{c.address ? ` · ${c.address.slice(0, 40)}` : ""}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────── Main POS component ─────────── */
 export default function POS() {
   const [search, setSearch] = useState("");
   const [results, setResults] = useState([]);
   const [cart, setCart] = useState([]);
-  const [customers, setCustomers] = useState([]);
-  const [customerId, setCustomerId] = useState("");
+  const [saleType, setSaleType] = useState("walk_in");   // "walk_in" | "online"
+  const [customer, setCustomer] = useState(null);
   const [invoice, setInvoice] = useState(null);
   const [error, setError] = useState("");
   const [globalDiscount, setGlobalDiscount] = useState(0);
@@ -81,10 +178,6 @@ export default function POS() {
   const [onlineLast4, setOnlineLast4] = useState("");
 
   const [successInvoice, setSuccessInvoice] = useState(null);
-
-  useEffect(() => {
-    api.get("/customers").then((r) => setCustomers(r.data)).catch(() => {});
-  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -174,12 +267,17 @@ export default function POS() {
     setOnlineLast4("");
     setOnlineMethod("phonepe");
     setGlobalDiscount(0);
-    setCustomerId("");
+    setCustomer(null);
+    setSaleType("walk_in");
   };
 
   const checkout = async () => {
     setError("");
     if (cart.length === 0) return setError("Cart is empty");
+
+    if (saleType === "online" && !customer) {
+      return setError("Please select an online customer");
+    }
 
     if (!useCash && !useOnline) {
       return setError("Please select a payment method (Cash or Online)");
@@ -216,7 +314,8 @@ export default function POS() {
     }
 
     const payload = {
-      customer_id: customerId ? Number(customerId) : null,
+      customer_id: customer ? customer.id : null,
+      sale_type: saleType,
       discount: Number(globalDiscount) || 0,
       payment_mode: payments[0]?.mode || "credit",
       items: cart.map((it) => ({
@@ -383,14 +482,27 @@ export default function POS() {
       {/* RIGHT COLUMN */}
       <div className="space-y-4">
         <Card title="Customer">
-          <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-            <option value="">Walk-in Customer</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} {c.phone ? `· ${c.phone}` : ""}
-              </option>
+          <div className="flex gap-2 mb-3">
+            {[["walk_in", "Walk-in"], ["online", "Online"]].map(([v, label]) => (
+              <button key={v} type="button"
+                      onClick={() => { setSaleType(v); setCustomer(null); }}
+                      className={`flex-1 py-1.5 rounded-lg text-sm font-semibold border ${
+                        saleType === v
+                          ? "bg-emerald-600 text-white border-emerald-600"
+                          : "bg-white text-slate-600 border-slate-300"}`}>
+                {label}
+              </button>
             ))}
-          </Select>
+          </div>
+
+          <CustomerPicker type={saleType} value={customer} onChange={setCustomer} />
+
+          {saleType === "online" && customer && (
+            <div className="mt-3 text-xs bg-blue-50 border border-blue-200 rounded p-2 text-slate-700">
+              <div><b>{customer.name}</b> · {customer.phone}</div>
+              {customer.address && <div className="mt-1">{customer.address}</div>}
+            </div>
+          )}
         </Card>
 
         <Card title="Payment">
